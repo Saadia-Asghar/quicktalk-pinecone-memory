@@ -1,0 +1,27 @@
+.env
+.venv/
+.test-deps/
+__pycache__/
+data/pinecone_fallback.json
+
+# Legacy research/demo artifacts kept locally but outside this focused service repo
+GOALS.md
+GOAL_TESTS.md
+MEM0_*.md
+PRESENTATION_BRIEF.md
+RAG_DEMO.md
+TEST_CASES.md
+*.docx
+app.py
+fable_agent.py
+goal_test_runner.py
+make_master_doc.py
+mem0_helpers.py
+mem0_streamlit_demo.py
+memory_layer.py
+rag_chatbot_demo.py
+rag_store.py
+requirements-mem0-demo.txt
+requirements-rag-demo.txt
+static/index.html
+data/*.db

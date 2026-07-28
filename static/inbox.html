@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Human Agent Inbox</title>
+  <style>
+    :root{font-family:Inter,Segoe UI,sans-serif;color:#172033;background:#f5f7fb}*{box-sizing:border-box}
+    body{margin:0}.top{background:#17233c;color:white;padding:20px 7%;display:flex;justify-content:space-between}.layout{max-width:1100px;margin:30px auto;display:grid;grid-template-columns:300px 1fr;gap:18px;padding:0 20px}
+    .panel,.card{background:white;border:1px solid #e1e6ef;border-radius:14px;box-shadow:0 5px 18px #17233c0d}.panel{padding:18px}.conversation{padding:22px}.eyebrow{font-size:12px;color:#68758d;text-transform:uppercase;letter-spacing:.08em}.card{border-left:5px solid #7259e8;padding:18px;margin:14px 0 24px}.card h2{font-size:16px;margin:0 0 12px}.card li{margin:10px 0;line-height:1.45}.field{margin:12px 0}label{display:block;font-size:12px;color:#68758d;margin-bottom:5px}input{width:100%;padding:10px;border:1px solid #ccd4e0;border-radius:8px}button{width:100%;padding:11px;border:0;border-radius:8px;background:#7259e8;color:white;font-weight:700;cursor:pointer}.muted{color:#68758d}.status{background:#dff8ec;color:#147249;padding:5px 10px;border-radius:99px;font-size:12px}@media(max-width:760px){.layout{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <header class="top"><strong>QuickTalk · Human Agent Inbox</strong><span class="status">Agent online</span></header>
+  <main class="layout">
+    <aside class="panel"><div class="eyebrow">Open conversation</div><div class="field"><label>Organization ID</label><input id="org" value="nayatel-demo"></div><div class="field"><label>Customer mobile</label><input id="mobile" value="+923331234567"></div><button id="load">Open customer</button></aside>
+    <section class="panel conversation">
+      <div class="eyebrow">Customer handoff</div><h1>Conversation</h1>
+      <section class="card" aria-labelledby="context-title"><h2 id="context-title">Agent Handoff Context</h2><ul id="bullets"><li class="muted">Open a customer to load their three-point history.</li></ul></section>
+      <p class="muted">The context card stays at the top of the Human Agent Inbox so the agent can scan history before replying.</p>
+    </section>
+  </main>
+  <script>
+    document.getElementById('load').addEventListener('click', async () => {
+      const org=encodeURIComponent(document.getElementById('org').value), mobile=encodeURIComponent(document.getElementById('mobile').value);
+      const response=await fetch(`/api/inbox/context-card?organization_id=${org}&mobile_no=${mobile}`), data=await response.json();
+      const list=document.getElementById('bullets'); list.innerHTML='';
+      (data.history_summary||[data.error||'Unable to load history']).forEach(text=>{const li=document.createElement('li');li.textContent=text;list.appendChild(li)});
+    });
+  </script>
+</body></html>
