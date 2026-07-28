@@ -8,7 +8,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY flask_app.py pinecone_memory.py mem0_memory.py ./
+COPY flask_app.py pinecone_memory.py mem0_memory.py tool_calling.py ./
 COPY static/inbox.html ./static/inbox.html
 
 EXPOSE 8765

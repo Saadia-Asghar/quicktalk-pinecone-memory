@@ -75,6 +75,56 @@ class FlaskMemoryServiceTests(unittest.TestCase):
         self.assertEqual(vector["namespace"], "org-org-a")
         self.assertEqual(vector["collection_name"], "test-mem0")
 
+    def test_mobile_identity_is_canonical(self):
+        first = pinecone_memory.normalize_mobile("92 333 1234567")
+        second = pinecone_memory.normalize_mobile("+92-333-1234567")
+        self.assertEqual(first, second)
+
+    def test_tool_registry_and_end_to_end_invocation(self):
+        listed = self.client.get("/api/tools")
+        self.assertEqual(listed.status_code, 200)
+        names = {tool["function"]["name"] for tool in listed.get_json()["tools"]}
+        self.assertEqual(names, {
+            "save_customer_memory", "search_customer_memory", "get_handoff_context"
+        })
+
+        arguments = {
+            "organization_id": "org-tools", "session_id": "session-tools",
+            "mobile_no": "923331112222", "text": "My internet issue is still happening",
+        }
+        saved = self.client.post("/api/tools/save_customer_memory/invoke", json={"arguments": arguments})
+        self.assertEqual(saved.status_code, 200)
+
+        handoff = self.client.post("/api/tools/get_handoff_context/invoke", json={
+            "arguments": {"organization_id": "org-tools", "mobile_no": "+923331112222"}
+        })
+        summary = handoff.get_json()["result"]["history_summary"]
+        self.assertEqual(len(summary), 3)
+        self.assertIn("internet issue", summary[0])
+
+    def test_unknown_tool_is_json_404(self):
+        response = self.client.post("/api/tools/not-a-tool/invoke", json={})
+        self.assertEqual(response.status_code, 404)
+        self.assertIn("Unknown tool", response.get_json()["error"])
+
+    def test_role_and_timestamp_are_validated(self):
+        body = {
+            "organization_id": "org-a", "session_id": "session-a",
+            "mobile_no": "+923331234567", "text": "hello", "role": "hacker",
+        }
+        self.assertEqual(self.client.post("/api/memories", json=body).status_code, 400)
+        body["role"] = "customer"
+        body["timestamp"] = "not-a-date"
+        self.assertEqual(self.client.post("/api/memories", json=body).status_code, 400)
+
+    @patch.dict("os.environ", {"SERVICE_API_KEY": "test-secret"}, clear=False)
+    def test_api_key_protects_memory_and_tool_routes(self):
+        protected = create_app(MemoryStore()).test_client()
+        self.assertEqual(protected.get("/api/tools").status_code, 401)
+        allowed = protected.get("/api/tools", headers={"X-API-Key": "test-secret"})
+        self.assertEqual(allowed.status_code, 200)
+        self.assertEqual(protected.get("/api/health").status_code, 200)
+
 
 if __name__ == "__main__":
     unittest.main()

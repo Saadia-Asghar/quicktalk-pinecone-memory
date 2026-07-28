@@ -8,7 +8,7 @@ import threading
 import uuid
 from typing import Any
 
-from pinecone_memory import _namespace, normalize_mobile, utc_now
+from pinecone_memory import _namespace, normalize_mobile, normalize_timestamp, validate_role
 
 
 class Mem0MemoryStore:
@@ -84,8 +84,8 @@ class Mem0MemoryStore:
             "organization_id": organization_id.strip(),
             "session_id": session_id.strip(),
             "mobile_no": mobile,
-            "timestamp": timestamp or utc_now(),
-            "role": role,
+            "timestamp": normalize_timestamp(timestamp),
+            "role": validate_role(role),
             "text": text.strip(),
         }
         self._client(organization_id).add(

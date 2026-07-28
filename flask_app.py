@@ -3,22 +3,43 @@
 from __future__ import annotations
 
 import os
+import hmac
 
 from flask import Flask, jsonify, request, send_from_directory
-from werkzeug.exceptions import BadRequest
+from dotenv import load_dotenv
+from werkzeug.exceptions import BadRequest, NotFound
 
 from mem0_memory import create_memory_store
 from pinecone_memory import MemoryStore, build_handoff_bullets
+from tool_calling import TOOL_DEFINITIONS, ToolRegistry
+
+load_dotenv()
 
 
 def create_app(store: MemoryStore | None = None) -> Flask:
     app = Flask(__name__, static_folder="static")
     memory_store = store or create_memory_store()
+    tools = ToolRegistry(memory_store, build_handoff_bullets)
+
+    @app.before_request
+    def authenticate():
+        expected = os.getenv("SERVICE_API_KEY")
+        if not expected or request.endpoint in {"index", "health", "static"}:
+            return None
+        supplied = request.headers.get("X-API-Key", "")
+        if not hmac.compare_digest(supplied, expected):
+            return jsonify({"error": "unauthorized"}), 401
 
     @app.errorhandler(ValueError)
     @app.errorhandler(BadRequest)
+    @app.errorhandler(NotFound)
     def invalid_request(error):
-        return jsonify({"error": str(error)}), 400
+        return jsonify({"error": str(error)}), getattr(error, "code", 400)
+
+    @app.errorhandler(RuntimeError)
+    def backend_error(error):
+        app.logger.exception("Memory backend failure")
+        return jsonify({"error": "memory_backend_unavailable", "detail": str(error)}), 503
 
     @app.get("/")
     def index():
@@ -26,7 +47,21 @@ def create_app(store: MemoryStore | None = None) -> Flask:
 
     @app.get("/api/health")
     def health():
-        return jsonify({"status": "ok", "memory_backend": memory_store.backend})
+        return jsonify({"status": "ok", "memory_backend": memory_store.backend, "tools": len(TOOL_DEFINITIONS)})
+
+    @app.get("/api/tools")
+    def list_tools():
+        return jsonify({"tools": TOOL_DEFINITIONS})
+
+    @app.post("/api/tools/<tool_name>/invoke")
+    def invoke_tool(tool_name: str):
+        body = request.get_json(force=True)
+        arguments = body.get("arguments", body)
+        try:
+            result = tools.invoke(tool_name, arguments)
+        except KeyError as exc:
+            raise NotFound(f"Unknown tool: {tool_name}") from exc
+        return jsonify({"tool": tool_name, "result": result})
 
     @app.post("/api/memories")
     def add_memory():

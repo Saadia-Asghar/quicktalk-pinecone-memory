@@ -7,6 +7,7 @@ import json
 import math
 import os
 import re
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,13 +23,30 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def normalize_timestamp(value: str | None) -> str:
+    if not value:
+        return utc_now()
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("timestamp must be ISO-8601") from exc
+    if parsed.tzinfo is None:
+        raise ValueError("timestamp must include a timezone")
+    return parsed.astimezone(timezone.utc).isoformat()
+
+
+def validate_role(role: str) -> str:
+    if role not in {"customer", "assistant", "system"}:
+        raise ValueError("role must be customer, assistant, or system")
+    return role
+
+
 def normalize_mobile(value: str) -> str:
     value = value.strip()
-    prefix = "+" if value.startswith("+") else ""
     digits = re.sub(r"\D", "", value)
     if len(digits) < 7 or len(digits) > 15:
         raise ValueError("mobile_no must contain 7 to 15 digits")
-    return prefix + digits
+    return "+" + digits
 
 
 def _namespace(organization_id: str) -> str:
@@ -50,6 +68,8 @@ def _embedding(text: str) -> list[float]:
 
 
 class MemoryStore:
+    _local_lock = threading.RLock()
+
     def __init__(self) -> None:
         self._index = None
         api_key = os.getenv("PINECONE_API_KEY")
@@ -72,8 +92,8 @@ class MemoryStore:
             "organization_id": organization_id.strip(),
             "session_id": session_id.strip(),
             "mobile_no": mobile,
-            "timestamp": timestamp or utc_now(),
-            "role": role,
+            "timestamp": normalize_timestamp(timestamp),
+            "role": validate_role(role),
             "text": text.strip(),
         }
         namespace = _namespace(organization_id)
@@ -84,9 +104,10 @@ class MemoryStore:
                 namespace=namespace,
             )
         else:
-            rows = self._read_local()
-            rows.append({**record, "namespace": namespace, "values": vector})
-            self._write_local(rows)
+            with self._local_lock:
+                rows = self._read_local()
+                rows.append({**record, "namespace": namespace, "values": vector})
+                self._write_local(rows)
         return {k: v for k, v in record.items() if k != "organization_id"} | {"organization_id": record["organization_id"]}
 
     def search(self, *, organization_id: str, mobile_no: str, query: str = "conversation history",
@@ -104,7 +125,8 @@ class MemoryStore:
             return [dict(match.metadata or {}) | {"score": match.score} for match in result.matches]
 
         q = _embedding(query)
-        rows = [r for r in self._read_local() if r.get("namespace") == namespace and r.get("mobile_no") == mobile]
+        with self._local_lock:
+            rows = [r for r in self._read_local() if r.get("namespace") == namespace and r.get("mobile_no") == mobile]
         if session_id:
             rows = [r for r in rows if r.get("session_id") == session_id]
         for row in rows:

@@ -15,6 +15,7 @@ exactly three-bullet handoff summary before the agent replies.
 - Optional Mem0 OSS extraction and lifecycle infrastructure on Pinecone
 - Responsive Human Agent Inbox demo
 - API validation and isolation tests
+- Flask-native tool calling with model-compatible JSON schemas
 
 ## Quick start
 
@@ -38,6 +39,7 @@ PINECONE_API_KEY=your-key
 PINECONE_INDEX=quicktalk-memories
 PINECONE_DIMENSION=384
 PORT=8765
+SERVICE_API_KEY=generate-a-long-random-secret
 ```
 
 Copy `.env.example` to `.env`; `.env` is excluded from Git. See
@@ -68,6 +70,15 @@ for the deterministic direct-Pinecone/local mode.
 | `POST` | `/api/memories` | Save a customer or assistant memory |
 | `GET` | `/api/memories` | Search isolated customer memories |
 | `GET` | `/api/inbox/context-card` | Return the three handoff bullets |
+| `GET` | `/api/tools` | Return agent function/tool schemas |
+| `POST` | `/api/tools/<name>/invoke` | Execute a memory tool |
+
+For production, set `SERVICE_API_KEY` and send it in the `X-API-Key` header.
+Health and the static inbox page remain public; memory and tool endpoints are
+protected. Place the service behind TLS and your normal gateway/identity layer.
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the component diagram, request
+sequence, isolation boundaries, and tool-calling lifecycle.
 
 ## Test
 

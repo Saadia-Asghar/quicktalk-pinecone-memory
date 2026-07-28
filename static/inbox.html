@@ -12,7 +12,7 @@
 <body>
   <header class="top"><strong>QuickTalk · Human Agent Inbox</strong><span class="status">Agent online</span></header>
   <main class="layout">
-    <aside class="panel"><div class="eyebrow">Open conversation</div><div class="field"><label>Organization ID</label><input id="org" value="nayatel-demo"></div><div class="field"><label>Customer mobile</label><input id="mobile" value="+923331234567"></div><button id="load">Open customer</button></aside>
+    <aside class="panel"><div class="eyebrow">Open conversation</div><div class="field"><label>Organization ID</label><input id="org" value="nayatel-demo"></div><div class="field"><label>Customer mobile</label><input id="mobile" value="+923331234567"></div><div class="field"><label>API key (only when enabled)</label><input id="apiKey" type="password" autocomplete="off"></div><button id="load">Open customer</button></aside>
     <section class="panel conversation">
       <div class="eyebrow">Customer handoff</div><h1>Conversation</h1>
       <section class="card" aria-labelledby="context-title"><h2 id="context-title">Agent Handoff Context</h2><ul id="bullets"><li class="muted">Open a customer to load their three-point history.</li></ul></section>
@@ -22,7 +22,8 @@
   <script>
     document.getElementById('load').addEventListener('click', async () => {
       const org=encodeURIComponent(document.getElementById('org').value), mobile=encodeURIComponent(document.getElementById('mobile').value);
-      const response=await fetch(`/api/inbox/context-card?organization_id=${org}&mobile_no=${mobile}`), data=await response.json();
+      const key=document.getElementById('apiKey').value;
+      const response=await fetch(`/api/inbox/context-card?organization_id=${org}&mobile_no=${mobile}`,{headers:key?{'X-API-Key':key}:{}}), data=await response.json();
       const list=document.getElementById('bullets'); list.innerHTML='';
       (data.history_summary||[data.error||'Unable to load history']).forEach(text=>{const li=document.createElement('li');li.textContent=text;list.appendChild(li)});
     });
