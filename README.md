@@ -12,6 +12,7 @@ exactly three-bullet handoff summary before the agent replies.
 - Session-aware memory storage and semantic retrieval
 - Three-bullet Agent Handoff Context Card
 - Local JSON fallback for development without Pinecone credentials
+- Optional Mem0 OSS extraction and lifecycle infrastructure on Pinecone
 - Responsive Human Agent Inbox demo
 - API validation and isolation tests
 
@@ -43,6 +44,22 @@ Copy `.env.example` to `.env`; `.env` is excluded from Git. See
 [FLASK_PINECONE_SERVICE.md](FLASK_PINECONE_SERVICE.md) for API examples and
 implementation details.
 
+## Enable Mem0 infrastructure
+
+Mem0 can replace the direct vector adapter while preserving the same Flask API:
+
+```env
+MEMORY_BACKEND=mem0
+OPENAI_API_KEY=your-openai-key
+PINECONE_API_KEY=your-pinecone-key
+MEM0_PINECONE_INDEX=quicktalk-mem0
+```
+
+The Mem0 adapter creates a separate Pinecone namespace for every organization
+and hashes `organization_id + mobile_no` into its `user_id`. Session, mobile,
+role, and timestamp remain attached as metadata. Keep `MEMORY_BACKEND=pinecone`
+for the deterministic direct-Pinecone/local mode.
+
 ## API overview
 
 | Method | Endpoint | Purpose |
@@ -70,7 +87,10 @@ docker run --rm -p 8765:8765 --env-file .env quicktalk-memory
 ```mermaid
 flowchart LR
   C[Customer conversation] --> F[Flask API]
-  F --> N[Organization namespace]
+  F --> M{Memory backend}
+  M -->|Direct| N[Organization namespace]
+  M -->|Mem0 OSS| X[Extraction and memory lifecycle]
+  X --> N
   N --> P[(Pinecone)]
   F --> H[3-bullet handoff card]
   H --> I[Human Agent Inbox]

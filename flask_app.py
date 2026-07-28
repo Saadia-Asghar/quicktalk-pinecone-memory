@@ -7,12 +7,13 @@ import os
 from flask import Flask, jsonify, request, send_from_directory
 from werkzeug.exceptions import BadRequest
 
+from mem0_memory import create_memory_store
 from pinecone_memory import MemoryStore, build_handoff_bullets
 
 
 def create_app(store: MemoryStore | None = None) -> Flask:
     app = Flask(__name__, static_folder="static")
-    memory_store = store or MemoryStore()
+    memory_store = store or create_memory_store()
 
     @app.errorhandler(ValueError)
     @app.errorhandler(BadRequest)

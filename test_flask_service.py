@@ -1,9 +1,11 @@
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 import pinecone_memory
+from mem0_memory import Mem0MemoryStore, create_memory_store
 from flask_app import create_app
 from pinecone_memory import MemoryStore
 
@@ -39,6 +41,39 @@ class FlaskMemoryServiceTests(unittest.TestCase):
     def test_invalid_limit_returns_400(self):
         response = self.client.get("/api/memories?organization_id=org-a&mobile_no=923331234567&limit=nope")
         self.assertEqual(response.status_code, 400)
+
+    def test_mem0_customer_identity_is_organization_scoped(self):
+        first = Mem0MemoryStore._customer_id("org-a", "+92 333 1234567")
+        same = Mem0MemoryStore._customer_id("org-a", "+923331234567")
+        other_org = Mem0MemoryStore._customer_id("org-b", "+923331234567")
+        self.assertEqual(first, same)
+        self.assertNotEqual(first, other_org)
+
+    @patch.dict("os.environ", {"MEMORY_BACKEND": "pinecone"}, clear=False)
+    def test_direct_backend_remains_default_option(self):
+        self.assertIsInstance(create_memory_store(), MemoryStore)
+
+    @patch.dict("os.environ", {
+        "PINECONE_API_KEY": "test-pinecone",
+        "OPENAI_API_KEY": "test-openai",
+        "MEM0_PINECONE_INDEX": "test-mem0",
+    }, clear=False)
+    def test_mem0_configures_an_organization_namespace(self):
+        captured = {}
+
+        class FakeMemory:
+            @classmethod
+            def from_config(cls, config):
+                captured.update(config)
+                return cls()
+
+        with patch.dict("sys.modules", {"mem0": types.SimpleNamespace(Memory=FakeMemory)}):
+            store = Mem0MemoryStore()
+            store._client("org-a")
+
+        vector = captured["vector_store"]["config"]
+        self.assertEqual(vector["namespace"], "org-org-a")
+        self.assertEqual(vector["collection_name"], "test-mem0")
 
 
 if __name__ == "__main__":

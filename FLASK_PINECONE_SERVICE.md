@@ -57,3 +57,20 @@ GET /api/inbox/context-card?organization_id=nayatel-demo&mobile_no=%2B9233312345
 
 Organization namespaces plus mandatory mobile metadata filters prevent one
 organization or customer from retrieving another one's memories.
+
+## Mem0 infrastructure
+
+Set `MEMORY_BACKEND=mem0` to route the same endpoints through Mem0 OSS. Mem0
+uses OpenAI for memory extraction and embeddings, and Pinecone for vectors.
+Each organization receives its own namespace, while an opaque composite Mem0
+`user_id` provides an additional customer-isolation boundary. Required values:
+
+```env
+MEMORY_BACKEND=mem0
+OPENAI_API_KEY=...
+PINECONE_API_KEY=...
+MEM0_PINECONE_INDEX=quicktalk-mem0
+MEM0_EMBEDDING_DIMENSION=1536
+```
+
+The Mem0 index dimension must match `MEM0_EMBEDDING_MODEL`.
