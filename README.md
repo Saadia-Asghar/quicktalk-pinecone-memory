@@ -124,6 +124,15 @@ MEM0_LOCAL_INFER=false
 This path is Flask → Mem0 → Ollama embeddings → Pinecone. It does not call
 OpenAI. Pinecone still requires a free account and API key for authentication.
 
+After configuring `.env`, run the real cloud integration:
+
+```bash
+python pinecone_integration_test.py
+```
+
+See [PINECONE_LIVE_TEST_REPORT.md](PINECONE_LIVE_TEST_REPORT.md) for the
+verified free-tier test path and result.
+
 ## API overview
 
 | Method | Endpoint | Purpose |

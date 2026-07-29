@@ -18,12 +18,19 @@ from pinecone_memory import MemoryStore
 class FlaskMemoryServiceTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
+        self.env_patch = patch.dict(
+            "os.environ",
+            {"PINECONE_API_KEY": "", "MEMORY_BACKEND": "pinecone", "SERVICE_API_KEY": ""},
+            clear=False,
+        )
+        self.env_patch.start()
         self.file_patch = patch.object(pinecone_memory, "DATA_FILE", Path(self.temp.name) / "memory.json")
         self.file_patch.start()
         self.client = create_app(MemoryStore()).test_client()
 
     def tearDown(self):
         self.file_patch.stop()
+        self.env_patch.stop()
         self.temp.cleanup()
 
     def test_memory_and_three_bullet_handoff_are_tenant_isolated(self):

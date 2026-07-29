@@ -26,3 +26,4 @@ requirements-rag-demo.txt
 static/index.html
 data/*.db
 data/qdrant/
+data/*-mem0-history.db
