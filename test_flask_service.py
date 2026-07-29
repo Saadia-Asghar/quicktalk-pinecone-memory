@@ -5,7 +5,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pinecone_memory
-from mem0_memory import FreeLocalMem0MemoryStore, Mem0MemoryStore, create_memory_store
+from mem0_memory import (
+    FreeLocalMem0MemoryStore,
+    FreePineconeMem0MemoryStore,
+    Mem0MemoryStore,
+    create_memory_store,
+)
 from flask_app import create_app
 from pinecone_memory import MemoryStore
 
@@ -113,6 +118,27 @@ class FlaskMemoryServiceTests(unittest.TestCase):
         )
         self.assertTrue(calls["user_id"].startswith("customer-"))
         self.assertEqual(calls["filters"], {"session_id": "session-a"})
+
+    @patch.dict("os.environ", {"PINECONE_API_KEY": "test-key"}, clear=False)
+    def test_free_pinecone_mode_uses_ollama_and_pinecone(self):
+        captured = {}
+
+        class FakeMemory:
+            @classmethod
+            def from_config(cls, config):
+                captured.update(config)
+                return cls()
+
+        with patch.dict("sys.modules", {"mem0": types.SimpleNamespace(Memory=FakeMemory)}):
+            store = FreePineconeMem0MemoryStore()
+            store._client("org-free-pinecone")
+
+        self.assertEqual(captured["llm"]["provider"], "ollama")
+        self.assertEqual(captured["embedder"]["provider"], "ollama")
+        self.assertEqual(captured["vector_store"]["provider"], "pinecone")
+        self.assertEqual(
+            captured["vector_store"]["config"]["namespace"], "org-org-free-pinecone"
+        )
 
     def test_mobile_identity_is_canonical(self):
         first = pinecone_memory.normalize_mobile("92 333 1234567")

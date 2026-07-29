@@ -193,6 +193,77 @@ class FreeLocalMem0MemoryStore(Mem0MemoryStore):
             return self._clients[namespace]
 
 
+class FreePineconeMem0MemoryStore(Mem0MemoryStore):
+    """Mem0 with free local Ollama inference/embeddings and Pinecone vectors."""
+
+    def __init__(self) -> None:
+        if not os.getenv("PINECONE_API_KEY"):
+            raise RuntimeError("Pinecone free mode requires PINECONE_API_KEY")
+        self._clients: dict[str, Any] = {}
+        self._lock = threading.Lock()
+
+    @property
+    def backend(self) -> str:
+        return "mem0-ollama-pinecone"
+
+    @property
+    def infer_memories(self) -> bool:
+        return os.getenv("MEM0_LOCAL_INFER", "false").lower() == "true"
+
+    def _client(self, organization_id: str):
+        namespace = _namespace(organization_id)
+        with self._lock:
+            if namespace not in self._clients:
+                from mem0 import Memory
+
+                dimensions = int(os.getenv("MEM0_LOCAL_EMBEDDING_DIMENSION", "768"))
+                config = {
+                    "llm": {
+                        "provider": "ollama",
+                        "config": {
+                            "model": os.getenv("MEM0_LOCAL_LLM_MODEL", "llama3.2:1b"),
+                            "temperature": 0,
+                            "max_tokens": 1200,
+                            "ollama_base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+                        },
+                    },
+                    "embedder": {
+                        "provider": "ollama",
+                        "config": {
+                            "model": os.getenv(
+                                "MEM0_LOCAL_EMBEDDING_MODEL", "nomic-embed-text:latest"
+                            ),
+                            "embedding_dims": dimensions,
+                            "ollama_base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+                        },
+                    },
+                    "vector_store": {
+                        "provider": "pinecone",
+                        "config": {
+                            "collection_name": os.getenv(
+                                "MEM0_FREE_PINECONE_INDEX", "quicktalk-mem0-free"
+                            ),
+                            "embedding_model_dims": dimensions,
+                            "namespace": namespace,
+                            "serverless_config": {
+                                "cloud": os.getenv("PINECONE_CLOUD", "aws"),
+                                "region": os.getenv("PINECONE_REGION", "us-east-1"),
+                            },
+                            "metric": "cosine",
+                        },
+                    },
+                    "history_db_path": os.getenv(
+                        "MEM0_LOCAL_HISTORY_DB", "data/mem0-pinecone-history.db"
+                    ),
+                    "custom_instructions": (
+                        "Extract durable contact-center facts, customer preferences, active issues, "
+                        "resolutions, and sentiment. Never merge identities or organizations."
+                    ),
+                }
+                self._clients[namespace] = Memory.from_config(config)
+            return self._clients[namespace]
+
+
 def create_memory_store():
     """Select the configured infrastructure without importing Mem0 unnecessarily."""
     backend = os.getenv("MEMORY_BACKEND", "pinecone").lower()
@@ -200,6 +271,8 @@ def create_memory_store():
         return Mem0MemoryStore()
     if backend == "mem0-local":
         return FreeLocalMem0MemoryStore()
+    if backend == "mem0-pinecone-free":
+        return FreePineconeMem0MemoryStore()
     from pinecone_memory import MemoryStore
 
     return MemoryStore()

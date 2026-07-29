@@ -103,6 +103,27 @@ When Flask runs in Docker but Ollama runs on the host, set
 `OLLAMA_BASE_URL=http://host.docker.internal:11434` and mount `/app/data` as a
 persistent volume for Qdrant and Mem0 history.
 
+### Pinecone free tier with no OpenAI
+
+Use Pinecone for the real vector infrastructure while keeping inference and
+embeddings local and free:
+
+```env
+MEMORY_BACKEND=mem0-pinecone-free
+PINECONE_API_KEY=your-free-tier-key
+MEM0_FREE_PINECONE_INDEX=quicktalk-mem0-free
+PINECONE_CLOUD=aws
+PINECONE_REGION=us-east-1
+OLLAMA_BASE_URL=http://localhost:11434
+MEM0_LOCAL_LLM_MODEL=llama3.2:1b
+MEM0_LOCAL_EMBEDDING_MODEL=nomic-embed-text:latest
+MEM0_LOCAL_EMBEDDING_DIMENSION=768
+MEM0_LOCAL_INFER=false
+```
+
+This path is Flask → Mem0 → Ollama embeddings → Pinecone. It does not call
+OpenAI. Pinecone still requires a free account and API key for authentication.
+
 ## API overview
 
 | Method | Endpoint | Purpose |

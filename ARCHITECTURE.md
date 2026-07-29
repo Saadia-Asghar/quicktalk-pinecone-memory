@@ -15,11 +15,13 @@ flowchart LR
   B -->|pinecone| D[Direct adapter]
   B -->|mem0| M[Mem0 extraction and lifecycle]
   B -->|mem0-local, free| L[Ollama + embedded Qdrant]
+  B -->|mem0-pinecone-free| FP[Ollama + Pinecone free tier]
   D --> P[(Pinecone)]
   D -->|no API key, development only| J[(Local JSON)]
   M --> O[OpenAI LLM and embeddings]
   M --> P
   L --> Q[(Local Qdrant)]
+  FP --> P
   P --> N[Namespace per organization]
 ```
 
