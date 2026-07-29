@@ -62,6 +62,47 @@ and hashes `organization_id + mobile_no` into its `user_id`. Session, mobile,
 role, and timestamp remain attached as metadata. Keep `MEMORY_BACKEND=pinecone`
 for the deterministic direct-Pinecone/local mode.
 
+## Fully free mode
+
+Use local Ollama for extraction and embeddings and embedded Qdrant for vectors:
+
+```env
+MEMORY_BACKEND=mem0-local
+OLLAMA_BASE_URL=http://localhost:11434
+MEM0_LOCAL_LLM_MODEL=llama3.2:1b
+MEM0_LOCAL_EMBEDDING_MODEL=nomic-embed-text:latest
+MEM0_LOCAL_EMBEDDING_DIMENSION=768
+MEM0_LOCAL_INFER=false
+```
+
+Install Ollama, then download the two free models:
+
+```bash
+ollama pull llama3.2:1b
+ollama pull nomic-embed-text
+```
+
+This mode makes no OpenAI or Pinecone calls. By default, Mem0 stores messages
+directly (`MEM0_LOCAL_INFER=false`) because very small local chat models do not
+always produce Mem0's strict extraction JSON. Set `MEM0_LOCAL_INFER=true` when
+using a stronger local model. The default mode still performs real semantic
+embedding and retrieval through Ollama and Qdrant. It is suitable for local
+testing and small single-machine deployments. Use Mem0 + Pinecone for
+horizontally scaled production after adding a Pinecone free-tier or paid API key.
+
+Run the real zero-cost Flask/Mem0/Ollama/Qdrant test:
+
+```bash
+python free_integration_test.py
+```
+
+See [FREE_MODE_REPORT.md](FREE_MODE_REPORT.md) for the tested path and the
+difference between this free local proof and a live Pinecone connection.
+
+When Flask runs in Docker but Ollama runs on the host, set
+`OLLAMA_BASE_URL=http://host.docker.internal:11434` and mount `/app/data` as a
+persistent volume for Qdrant and Mem0 history.
+
 ## API overview
 
 | Method | Endpoint | Purpose |

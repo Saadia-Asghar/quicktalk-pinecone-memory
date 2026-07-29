@@ -14,10 +14,12 @@ flowchart LR
   R --> B{MEMORY_BACKEND}
   B -->|pinecone| D[Direct adapter]
   B -->|mem0| M[Mem0 extraction and lifecycle]
+  B -->|mem0-local, free| L[Ollama + embedded Qdrant]
   D --> P[(Pinecone)]
   D -->|no API key, development only| J[(Local JSON)]
   M --> O[OpenAI LLM and embeddings]
   M --> P
+  L --> Q[(Local Qdrant)]
   P --> N[Namespace per organization]
 ```
 

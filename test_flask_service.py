@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pinecone_memory
-from mem0_memory import Mem0MemoryStore, create_memory_store
+from mem0_memory import FreeLocalMem0MemoryStore, Mem0MemoryStore, create_memory_store
 from flask_app import create_app
 from pinecone_memory import MemoryStore
 
@@ -74,6 +74,45 @@ class FlaskMemoryServiceTests(unittest.TestCase):
         vector = captured["vector_store"]["config"]
         self.assertEqual(vector["namespace"], "org-org-a")
         self.assertEqual(vector["collection_name"], "test-mem0")
+
+    def test_free_mem0_config_uses_ollama_and_local_qdrant(self):
+        captured = {}
+
+        class FakeMemory:
+            @classmethod
+            def from_config(cls, config):
+                captured.update(config)
+                return cls()
+
+        with patch.dict("sys.modules", {"mem0": types.SimpleNamespace(Memory=FakeMemory)}):
+            store = FreeLocalMem0MemoryStore()
+            store._client("org-free")
+
+        self.assertEqual(captured["llm"]["provider"], "ollama")
+        self.assertEqual(captured["embedder"]["provider"], "ollama")
+        self.assertEqual(captured["vector_store"]["provider"], "qdrant")
+        self.assertIn("org-org-free", captured["vector_store"]["config"]["path"])
+        self.assertFalse(store.infer_memories)
+
+    def test_mem0_search_passes_customer_as_named_user_id(self):
+        calls = {}
+
+        class FakeClient:
+            def search(self, query, **kwargs):
+                calls["query"] = query
+                calls.update(kwargs)
+                return {"results": []}
+
+        store = object.__new__(Mem0MemoryStore)
+        store._client = lambda organization_id: FakeClient()
+        store.search(
+            organization_id="org-a",
+            mobile_no="+923331234567",
+            query="billing history",
+            session_id="session-a",
+        )
+        self.assertTrue(calls["user_id"].startswith("customer-"))
+        self.assertEqual(calls["filters"], {"session_id": "session-a"})
 
     def test_mobile_identity_is_canonical(self):
         first = pinecone_memory.normalize_mobile("92 333 1234567")
