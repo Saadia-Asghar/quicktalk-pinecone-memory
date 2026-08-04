@@ -1,0 +1,141 @@
+{
+  "user_profile": {
+    "name": "Sadia",
+    "organization_id": "nayatel",
+    "mobile_no": "+923331234567",
+    "description": "Nayatel customer experiencing evening internet disconnections over the last 30 days"
+  },
+  "save_payloads": [
+    {
+      "endpoint": "/api/tools/save_customer_memory/invoke",
+      "method": "POST",
+      "description": "Session 1 - Customer's first complaint (1 month ago)",
+      "payload": {
+        "arguments": {
+          "organization_id": "nayatel",
+          "session_id": "nayatel-sess-001a",
+          "mobile_no": "+923331234567",
+          "role": "customer",
+          "text": "My internet disconnects every evening around 8 PM. It is very annoying.",
+          "timestamp": "2026-06-30T20:15:00+05:00"
+        }
+      }
+    },
+    {
+      "endpoint": "/api/tools/save_customer_memory/invoke",
+      "method": "POST",
+      "description": "Session 1 - Support agent's initial diagnostics",
+      "payload": {
+        "arguments": {
+          "organization_id": "nayatel",
+          "session_id": "nayatel-sess-001a",
+          "mobile_no": "+923331234567",
+          "role": "assistant",
+          "text": "Hello Sadia! Let me check the line stats. We see some SNR drops. Let's monitor it for 24 hours.",
+          "timestamp": "2026-06-30T20:18:00+05:00"
+        }
+      }
+    },
+    {
+      "endpoint": "/api/tools/save_customer_memory/invoke",
+      "method": "POST",
+      "description": "Session 2 - Follow-up issue still happening (2 weeks ago)",
+      "payload": {
+        "arguments": {
+          "organization_id": "nayatel",
+          "session_id": "nayatel-sess-001b",
+          "mobile_no": "+923331234567",
+          "role": "customer",
+          "text": "The disconnect issue is still happening. It happened last night too.",
+          "timestamp": "2026-07-15T19:45:00+05:00"
+        }
+      }
+    },
+    {
+      "endpoint": "/api/tools/save_customer_memory/invoke",
+      "method": "POST",
+      "description": "Session 2 - Technician dispatch and ticket #54321 creation",
+      "payload": {
+        "arguments": {
+          "organization_id": "nayatel",
+          "session_id": "nayatel-sess-001b",
+          "mobile_no": "+923331234567",
+          "role": "assistant",
+          "text": "Apologies for the trouble. I have registered technical support ticket #54321 to dispatch a technician to check the outdoor fiber splice box.",
+          "timestamp": "2026-07-15T19:50:00+05:00"
+        }
+      }
+    },
+    {
+      "endpoint": "/api/tools/save_customer_memory/invoke",
+      "method": "POST",
+      "description": "Session 3 - Escalation (Today)",
+      "payload": {
+        "arguments": {
+          "organization_id": "nayatel",
+          "session_id": "nayatel-sess-001c",
+          "mobile_no": "+923331234567",
+          "role": "customer",
+          "text": "The technician came last week but the connection is still dropping every evening. I need a status update on ticket #54321.",
+          "timestamp": "2026-07-30T14:00:00+05:00"
+        }
+      }
+    }
+  ],
+  "search_payload": {
+    "endpoint": "/api/tools/search_customer_memory/invoke",
+    "method": "POST",
+    "description": "Search Sadia's history for unresolved connection issues",
+    "payload": {
+      "arguments": {
+        "organization_id": "nayatel",
+        "mobile_no": "+923331234567",
+        "query": "unresolved internet or connection issues ticket 54321",
+        "limit": 5
+      }
+    }
+  },
+  "handoff_payload": {
+    "endpoint": "/api/tools/get_handoff_context/invoke",
+    "method": "POST",
+    "description": "Retrieve the 3-bullet agent handoff context card",
+    "payload": {
+      "arguments": {
+        "organization_id": "nayatel",
+        "mobile_no": "+923331234567"
+      }
+    }
+  },
+  "direct_api_payloads": {
+    "add_memory": {
+      "endpoint": "/api/memories",
+      "method": "POST",
+      "payload": {
+        "organization_id": "nayatel",
+        "session_id": "nayatel-sess-001c",
+        "mobile_no": "+923331234567",
+        "role": "customer",
+        "text": "The connection is still dropping every evening. Ticket #54321",
+        "timestamp": "2026-07-30T14:00:00+05:00"
+      }
+    },
+    "search_memories": {
+      "endpoint": "/api/memories",
+      "method": "GET",
+      "query_params": {
+        "organization_id": "nayatel",
+        "mobile_no": "+923331234567",
+        "q": "ticket 54321",
+        "limit": 5
+      }
+    },
+    "handoff_card": {
+      "endpoint": "/api/inbox/context-card",
+      "method": "GET",
+      "query_params": {
+        "organization_id": "nayatel",
+        "mobile_no": "+923331234567"
+      }
+    }
+  }
+}

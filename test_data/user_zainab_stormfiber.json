@@ -1,0 +1,141 @@
+{
+  "user_profile": {
+    "name": "Zainab",
+    "organization_id": "stormfiber",
+    "mobile_no": "+923214567890",
+    "description": "StormFiber customer requesting refund for a double router charge over the last 30 days"
+  },
+  "save_payloads": [
+    {
+      "endpoint": "/api/tools/save_customer_memory/invoke",
+      "method": "POST",
+      "description": "Session 1 - Customer reports duplicate fee (1 month ago)",
+      "payload": {
+        "arguments": {
+          "organization_id": "stormfiber",
+          "session_id": "storm-sess-003a",
+          "mobile_no": "+923214567890",
+          "role": "customer",
+          "text": "I looked at my June bill and noticed a duplicate router fee of 500 PKR.",
+          "timestamp": "2026-06-28T09:30:00+05:00"
+        }
+      }
+    },
+    {
+      "endpoint": "/api/tools/save_customer_memory/invoke",
+      "method": "POST",
+      "description": "Session 1 - Agent escalates charge issue",
+      "payload": {
+        "arguments": {
+          "organization_id": "stormfiber",
+          "session_id": "storm-sess-003a",
+          "mobile_no": "+923214567890",
+          "role": "assistant",
+          "text": "Let me check. Yes, it seems there is a double charge error. I will forward it to the billing department for approval.",
+          "timestamp": "2026-06-28T09:35:00+05:00"
+        }
+      }
+    },
+    {
+      "endpoint": "/api/tools/save_customer_memory/invoke",
+      "method": "POST",
+      "description": "Session 2 - Follow-up on refund status (2 weeks ago)",
+      "payload": {
+        "arguments": {
+          "organization_id": "stormfiber",
+          "session_id": "storm-sess-003b",
+          "mobile_no": "+923214567890",
+          "role": "customer",
+          "text": "Any update on my duplicate router charge refund?",
+          "timestamp": "2026-07-12T14:20:00+05:00"
+        }
+      }
+    },
+    {
+      "endpoint": "/api/tools/save_customer_memory/invoke",
+      "method": "POST",
+      "description": "Session 2 - Agent confirms billing approval",
+      "payload": {
+        "arguments": {
+          "organization_id": "stormfiber",
+          "session_id": "storm-sess-003b",
+          "mobile_no": "+923214567890",
+          "role": "assistant",
+          "text": "The billing department has approved the refund. A credit adjustment of 500 PKR will be applied to your next bill.",
+          "timestamp": "2026-07-12T14:25:00+05:00"
+        }
+      }
+    },
+    {
+      "endpoint": "/api/tools/save_customer_memory/invoke",
+      "method": "POST",
+      "description": "Session 3 - Check invoice adjustment (Today)",
+      "payload": {
+        "arguments": {
+          "organization_id": "stormfiber",
+          "session_id": "storm-sess-003c",
+          "mobile_no": "+923214567890",
+          "role": "customer",
+          "text": "I received my July invoice but the 500 PKR credit is not showing. Please verify the refund was processed.",
+          "timestamp": "2026-07-30T14:30:00+05:00"
+        }
+      }
+    }
+  ],
+  "search_payload": {
+    "endpoint": "/api/tools/search_customer_memory/invoke",
+    "method": "POST",
+    "description": "Search Zainab's history for refund/billing details",
+    "payload": {
+      "arguments": {
+        "organization_id": "stormfiber",
+        "mobile_no": "+923214567890",
+        "query": "double router charge billing refund 500 PKR credit",
+        "limit": 5
+      }
+    }
+  },
+  "handoff_payload": {
+    "endpoint": "/api/tools/get_handoff_context/invoke",
+    "method": "POST",
+    "description": "Retrieve the 3-bullet agent handoff context card",
+    "payload": {
+      "arguments": {
+        "organization_id": "stormfiber",
+        "mobile_no": "+923214567890"
+      }
+    }
+  },
+  "direct_api_payloads": {
+    "add_memory": {
+      "endpoint": "/api/memories",
+      "method": "POST",
+      "payload": {
+        "organization_id": "stormfiber",
+        "session_id": "storm-sess-003c",
+        "mobile_no": "+923214567890",
+        "role": "customer",
+        "text": "Double router fee refund of 500 PKR",
+        "timestamp": "2026-07-30T14:30:00+05:00"
+      }
+    },
+    "search_memories": {
+      "endpoint": "/api/memories",
+      "method": "GET",
+      "query_params": {
+        "organization_id": "stormfiber",
+        "mobile_no": "+923214567890",
+        "q": "refund",
+        "limit": 5
+      }
+    },
+    "handoff_card": {
+      "endpoint": "/api/inbox/context-card",
+      "method": "GET",
+      "query_params": {
+        "organization_id": "stormfiber",
+        "mobile_no": "+923214567890"
+      }
+    }
+  }
+}

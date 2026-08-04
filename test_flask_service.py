@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pinecone_memory
+from analytics import AnalyticsRepository
 from mem0_memory import (
     FreeLocalMem0MemoryStore,
     FreePineconeMem0MemoryStore,
@@ -26,7 +27,8 @@ class FlaskMemoryServiceTests(unittest.TestCase):
         self.env_patch.start()
         self.file_patch = patch.object(pinecone_memory, "DATA_FILE", Path(self.temp.name) / "memory.json")
         self.file_patch.start()
-        self.client = create_app(MemoryStore()).test_client()
+        self.analytics = AnalyticsRepository(Path(self.temp.name) / "analytics.db")
+        self.client = create_app(MemoryStore(), self.analytics).test_client()
 
     def tearDown(self):
         self.file_patch.stop()
@@ -157,7 +159,8 @@ class FlaskMemoryServiceTests(unittest.TestCase):
         self.assertEqual(listed.status_code, 200)
         names = {tool["function"]["name"] for tool in listed.get_json()["tools"]}
         self.assertEqual(names, {
-            "save_customer_memory", "search_customer_memory", "get_handoff_context"
+            "save_customer_memory", "search_customer_memory", "get_handoff_context",
+            "get_contextual_welcome",
         })
 
         arguments = {
@@ -191,7 +194,7 @@ class FlaskMemoryServiceTests(unittest.TestCase):
 
     @patch.dict("os.environ", {"SERVICE_API_KEY": "test-secret"}, clear=False)
     def test_api_key_protects_memory_and_tool_routes(self):
-        protected = create_app(MemoryStore()).test_client()
+        protected = create_app(MemoryStore(), self.analytics).test_client()
         self.assertEqual(protected.get("/api/tools").status_code, 401)
         allowed = protected.get("/api/tools", headers={"X-API-Key": "test-secret"})
         self.assertEqual(allowed.status_code, 200)

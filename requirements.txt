@@ -4,3 +4,4 @@ gunicorn>=23.0,<24.0
 mem0ai>=0.1.118,<1.0
 ollama>=0.5,<1.0
 python-dotenv==1.0.1
+redis>=5.0,<7.0

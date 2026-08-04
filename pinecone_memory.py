@@ -134,12 +134,28 @@ class MemoryStore:
         rows.sort(key=lambda r: (r["score"], r["timestamp"]), reverse=True)
         return [{k: v for k, v in row.items() if k not in {"values", "namespace"}} for row in rows[:limit]]
 
-    def recent(self, *, organization_id: str, mobile_no: str, limit: int = 30) -> list[dict[str, Any]]:
+    def recent(self, *, organization_id: str, mobile_no: str, limit: int = 100) -> list[dict[str, Any]]:
         items = self.search(
             organization_id=organization_id, mobile_no=mobile_no,
             query="issue request resolution preference", limit=limit,
         )
-        return sorted(items, key=lambda item: item.get("timestamp", ""), reverse=True)
+        now = datetime.now(timezone.utc)
+        filtered = []
+        for item in items:
+            ts = item.get("timestamp")
+            if ts:
+                try:
+                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    age_seconds = (now - dt).total_seconds()
+                    if 0 <= age_seconds <= 30 * 24 * 3600:
+                        filtered.append(item)
+                except ValueError:
+                    filtered.append(item)
+            else:
+                filtered.append(item)
+        return sorted(filtered, key=lambda item: item.get("timestamp", ""), reverse=True)
 
     @staticmethod
     def _read_local() -> list[dict[str, Any]]:

@@ -6,6 +6,7 @@ import hashlib
 import os
 import threading
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 from pinecone_memory import _namespace, normalize_mobile, normalize_timestamp, validate_role
@@ -122,12 +123,34 @@ class Mem0MemoryStore:
             normalized.append(metadata)
         return normalized
 
-    def recent(self, *, organization_id: str, mobile_no: str, limit: int = 30) -> list[dict[str, Any]]:
-        items = self.search(
-            organization_id=organization_id, mobile_no=mobile_no,
-            query="customer issue outcome resolution sentiment and preferences", limit=limit,
+    def recent(self, *, organization_id: str, mobile_no: str, limit: int = 100) -> list[dict[str, Any]]:
+        mobile = normalize_mobile(mobile_no)
+        response = self._client(organization_id).get_all(
+            user_id=self._customer_id(organization_id, mobile), limit=min(limit, 100)
         )
-        return sorted(items, key=lambda item: item.get("timestamp", ""), reverse=True)
+        results = response.get("results", []) if isinstance(response, dict) else response
+        items = []
+        for item in results or []:
+            metadata = dict(item.get("metadata") or {})
+            metadata.setdefault("text", item.get("memory", ""))
+            items.append(metadata)
+        now = datetime.now(timezone.utc)
+        filtered = []
+        for item in items:
+            ts = item.get("timestamp")
+            if ts:
+                try:
+                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    age_seconds = (now - dt).total_seconds()
+                    if 0 <= age_seconds <= 30 * 24 * 3600:
+                        filtered.append(item)
+                except ValueError:
+                    filtered.append(item)
+            else:
+                filtered.append(item)
+        return sorted(filtered, key=lambda item: item.get("timestamp", ""), reverse=True)
 
 
 class FreeLocalMem0MemoryStore(Mem0MemoryStore):

@@ -1,0 +1,156 @@
+{
+  "user_profile": {
+    "name": "Ahmed",
+    "organization_id": "ptcl",
+    "mobile_no": "+923009876543",
+    "description": "PTCL customer seeking and verifying a package upgrade to 100 Mbps GPON over the last 30 days"
+  },
+  "save_payloads": [
+    {
+      "endpoint": "/api/tools/save_customer_memory/invoke",
+      "method": "POST",
+      "description": "Session 1 - Initial package inquiry (1 month ago)",
+      "payload": {
+        "arguments": {
+          "organization_id": "ptcl",
+          "session_id": "ptcl-sess-002a",
+          "mobile_no": "+923009876543",
+          "role": "customer",
+          "text": "I am interested in upgrading my internet package to a faster tier. What GPON packages do you have?",
+          "timestamp": "2026-07-01T11:00:00+05:00"
+        }
+      }
+    },
+    {
+      "endpoint": "/api/tools/save_customer_memory/invoke",
+      "method": "POST",
+      "description": "Session 1 - Agent shares pricing details",
+      "payload": {
+        "arguments": {
+          "organization_id": "ptcl",
+          "session_id": "ptcl-sess-002a",
+          "mobile_no": "+923009876543",
+          "role": "assistant",
+          "text": "Hello Ahmed! We offer GPON fiber speeds up to 100 Mbps for 4500 PKR/month.",
+          "timestamp": "2026-07-01T11:05:00+05:00"
+        }
+      }
+    },
+    {
+      "endpoint": "/api/tools/save_customer_memory/invoke",
+      "method": "POST",
+      "description": "Session 2 - Upgrade process initiation (1 week ago)",
+      "payload": {
+        "arguments": {
+          "organization_id": "ptcl",
+          "session_id": "ptcl-sess-002b",
+          "mobile_no": "+923009876543",
+          "role": "customer",
+          "text": "I want to upgrade my package to the 100 Mbps GPON tier. Please let me know the process.",
+          "timestamp": "2026-07-23T10:00:00+05:00"
+        }
+      }
+    },
+    {
+      "endpoint": "/api/tools/save_customer_memory/invoke",
+      "method": "POST",
+      "description": "Session 2 - Agent informs provisioning timeframe",
+      "payload": {
+        "arguments": {
+          "organization_id": "ptcl",
+          "session_id": "ptcl-sess-002b",
+          "mobile_no": "+923009876543",
+          "role": "assistant",
+          "text": "Sure! I can initiate the upgrade. It requires a system provisioning request which takes 2-3 working days.",
+          "timestamp": "2026-07-23T10:05:00+05:00"
+        }
+      }
+    },
+    {
+      "endpoint": "/api/tools/save_customer_memory/invoke",
+      "method": "POST",
+      "description": "Session 2 - Customer confirms",
+      "payload": {
+        "arguments": {
+          "organization_id": "ptcl",
+          "session_id": "ptcl-sess-002b",
+          "mobile_no": "+923009876543",
+          "role": "customer",
+          "text": "Okay, please proceed with the package upgrade.",
+          "timestamp": "2026-07-23T10:10:00+05:00"
+        }
+      }
+    },
+    {
+      "endpoint": "/api/tools/save_customer_memory/invoke",
+      "method": "POST",
+      "description": "Session 3 - Checking upgrade status (Today)",
+      "payload": {
+        "arguments": {
+          "organization_id": "ptcl",
+          "session_id": "ptcl-sess-002c",
+          "mobile_no": "+923009876543",
+          "role": "customer",
+          "text": "Hi, has my 100 Mbps package upgrade been activated yet?",
+          "timestamp": "2026-07-30T14:15:00+05:00"
+        }
+      }
+    }
+  ],
+  "search_payload": {
+    "endpoint": "/api/tools/search_customer_memory/invoke",
+    "method": "POST",
+    "description": "Search Ahmed's history for package upgrade requests",
+    "payload": {
+      "arguments": {
+        "organization_id": "ptcl",
+        "mobile_no": "+923009876543",
+        "query": "package upgrade GPON 100 Mbps",
+        "limit": 5
+      }
+    }
+  },
+  "handoff_payload": {
+    "endpoint": "/api/tools/get_handoff_context/invoke",
+    "method": "POST",
+    "description": "Retrieve the 3-bullet agent handoff context card",
+    "payload": {
+      "arguments": {
+        "organization_id": "ptcl",
+        "mobile_no": "+923009876543"
+      }
+    }
+  },
+  "direct_api_payloads": {
+    "add_memory": {
+      "endpoint": "/api/memories",
+      "method": "POST",
+      "payload": {
+        "organization_id": "ptcl",
+        "session_id": "ptcl-sess-002c",
+        "mobile_no": "+923009876543",
+        "role": "customer",
+        "text": "Upgrade to 100 Mbps GPON",
+        "timestamp": "2026-07-30T14:15:00+05:00"
+      }
+    },
+    "search_memories": {
+      "endpoint": "/api/memories",
+      "method": "GET",
+      "query_params": {
+        "organization_id": "ptcl",
+        "mobile_no": "+923009876543",
+        "q": "upgrade",
+        "limit": 5
+      }
+    },
+    "handoff_card": {
+      "endpoint": "/api/inbox/context-card",
+      "method": "GET",
+      "query_params": {
+        "organization_id": "ptcl",
+        "mobile_no": "+923009876543"
+      }
+    }
+  }
+}

@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import os
 import hmac
+import threading
 
 from flask import Flask, jsonify, request, send_from_directory
 from dotenv import load_dotenv
 from werkzeug.exceptions import BadRequest, NotFound
 
+from analytics import AnalyticsRepository
 from mem0_memory import create_memory_store
 from pinecone_memory import MemoryStore, build_handoff_bullets
 from tool_calling import TOOL_DEFINITIONS, ToolRegistry
@@ -16,15 +18,18 @@ from tool_calling import TOOL_DEFINITIONS, ToolRegistry
 load_dotenv()
 
 
-def create_app(store: MemoryStore | None = None) -> Flask:
+def create_app(store: MemoryStore | None = None, analytics_repository=None) -> Flask:
     app = Flask(__name__, static_folder="static")
     memory_store = store or create_memory_store()
-    tools = ToolRegistry(memory_store, build_handoff_bullets)
+    analytics = analytics_repository or AnalyticsRepository()
+    tools = ToolRegistry(memory_store, build_handoff_bullets, analytics)
 
     @app.before_request
     def authenticate():
         expected = os.getenv("SERVICE_API_KEY")
-        if not expected or request.endpoint in {"index", "health", "static"}:
+        if not expected or request.endpoint in {
+            "index", "health", "static", "custom_inbox", "organization_dashboard"
+        }:
             return None
         supplied = request.headers.get("X-API-Key", "")
         if not hmac.compare_digest(supplied, expected):
@@ -47,7 +52,10 @@ def create_app(store: MemoryStore | None = None) -> Flask:
 
     @app.get("/api/health")
     def health():
-        return jsonify({"status": "ok", "memory_backend": memory_store.backend, "tools": len(TOOL_DEFINITIONS)})
+        return jsonify({
+            "status": "ok", "memory_backend": memory_store.backend,
+            "profile_cache": analytics.cache.backend, "tools": len(TOOL_DEFINITIONS),
+        })
 
     @app.get("/api/tools")
     def list_tools():
@@ -75,7 +83,37 @@ def create_app(store: MemoryStore | None = None) -> Flask:
             mobile_no=body["mobile_no"], text=body["text"],
             role=body.get("role", "customer"), timestamp=body.get("timestamp"),
         )
+        analytics.record_memory(record)
         return jsonify(record), 201
+
+    @app.get("/api/analytics/organizations")
+    def analytics_organizations():
+        return jsonify({"organizations": analytics.list_organizations()})
+
+    @app.get("/api/analytics/dashboard")
+    def analytics_dashboard():
+        organization_id = request.args.get("organization_id", "")
+        if not organization_id:
+            raise BadRequest("organization_id is required")
+        try:
+            days = int(request.args.get("days", "30"))
+        except ValueError as exc:
+            raise BadRequest("days must be an integer") from exc
+        return jsonify(analytics.dashboard(organization_id, days))
+
+    @app.get("/api/profiles/<path:mobile_no>")
+    def customer_profile(mobile_no: str):
+        organization_id = request.args.get("organization_id", "")
+        if not organization_id:
+            raise BadRequest("organization_id is required")
+        try:
+            limit = min(max(int(request.args.get("session_limit", "5")), 1), 50)
+            offset = max(int(request.args.get("session_offset", "0")), 0)
+        except ValueError as exc:
+            raise BadRequest("session_limit and session_offset must be integers") from exc
+        return jsonify(analytics.get_profile(
+            organization_id, mobile_no, session_limit=limit, session_offset=offset
+        ))
 
     @app.get("/api/memories")
     def find_memories():
@@ -100,13 +138,12 @@ def create_app(store: MemoryStore | None = None) -> Flask:
         mobile_no = request.args.get("mobile_no", "")
         if not organization_id or not mobile_no:
             raise BadRequest("organization_id and mobile_no are required")
-        memories = memory_store.recent(organization_id=organization_id, mobile_no=mobile_no)
-        return jsonify({
-            "organization_id": organization_id,
-            "mobile_no": mobile_no,
-            "history_summary": build_handoff_bullets(memories),
-            "memory_count": len(memories),
-        })
+        return jsonify(tools.invoke("get_handoff_context", {
+            "organization_id": organization_id, "mobile_no": mobile_no,
+        }))
+
+    if analytics_repository is None and os.getenv("WARMUP_ON_STARTUP", "false").lower() == "true":
+        threading.Thread(target=analytics.warm, name="profile-cache-warmup", daemon=True).start()
 
     return app
 

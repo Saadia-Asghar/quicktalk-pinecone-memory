@@ -1,0 +1,119 @@
+{
+  "dataset": "QuickTalk two-month multi-tenant demo",
+  "period": {"from": "2026-06-01", "to": "2026-07-31"},
+  "scope_rule": "Pinecone organization_id = tenant_id--organization_id",
+  "organizations": [
+    {
+      "tenant_id": "tenant-northstar-001",
+      "organization_id": "northstar-telecom",
+      "organization_name": "Northstar Telecom Demo",
+      "pinecone_scope": "tenant-northstar-001--northstar-telecom",
+      "customers": [
+        {
+          "display_name": "Sadia Khan",
+          "mobile_no": "+923331110001",
+          "sessions": [
+            {
+              "month": "2026-06",
+              "session_id": "northstar-sadia-20260612",
+              "messages": [
+                {"timestamp": "2026-06-12T09:05:00+05:00", "role": "customer", "text": "My name is Sadia. My June bill includes an unexpected equipment charge of PKR 2,500."},
+                {"timestamp": "2026-06-12T09:07:00+05:00", "role": "assistant", "text": "I checked the account and raised billing case NS-BILL-0612 for the equipment charge."},
+                {"timestamp": "2026-06-14T14:20:00+05:00", "role": "customer", "text": "Thank you, the equipment charge was reversed and the June billing issue is resolved."}
+              ]
+            },
+            {
+              "month": "2026-07",
+              "session_id": "northstar-sadia-20260722",
+              "messages": [
+                {"timestamp": "2026-07-22T20:10:00+05:00", "role": "customer", "text": "My fiber internet disconnects every evening between 8 PM and 10 PM."},
+                {"timestamp": "2026-07-22T20:13:00+05:00", "role": "assistant", "text": "I opened technical case NS-NET-0722 and requested line monitoring during the evening window."},
+                {"timestamp": "2026-07-25T21:00:00+05:00", "role": "customer", "text": "The evening disconnection is still happening. I am frustrated because the July internet issue remains unresolved."}
+              ]
+            }
+          ]
+        },
+        {
+          "display_name": "Ali Raza",
+          "mobile_no": "+923331110002",
+          "sessions": [
+            {
+              "month": "2026-06",
+              "session_id": "northstar-ali-20260618",
+              "messages": [
+                {"timestamp": "2026-06-18T11:00:00+05:00", "role": "customer", "text": "I want to upgrade from 30 Mbps to 50 Mbps but need the monthly price first."},
+                {"timestamp": "2026-06-18T11:04:00+05:00", "role": "assistant", "text": "The 50 Mbps plan price was shared and upgrade request NS-PLAN-0618 was submitted."},
+                {"timestamp": "2026-06-19T16:30:00+05:00", "role": "customer", "text": "The 50 Mbps upgrade is active now. I am satisfied with the quick resolution."}
+              ]
+            },
+            {
+              "month": "2026-07",
+              "session_id": "northstar-ali-20260728",
+              "messages": [
+                {"timestamp": "2026-07-28T10:15:00+05:00", "role": "customer", "text": "Please email me the tax certificate for July for my office records."},
+                {"timestamp": "2026-07-28T10:18:00+05:00", "role": "assistant", "text": "The July tax certificate was generated and sent to the registered email address."},
+                {"timestamp": "2026-07-28T10:25:00+05:00", "role": "customer", "text": "I received the certificate. This request is resolved, thank you."}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "tenant_id": "tenant-urbanpay-002",
+      "organization_id": "urbanpay-wallet",
+      "organization_name": "UrbanPay Wallet Demo",
+      "pinecone_scope": "tenant-urbanpay-002--urbanpay-wallet",
+      "customers": [
+        {
+          "display_name": "Fatima Noor",
+          "mobile_no": "+923332220001",
+          "sessions": [
+            {
+              "month": "2026-06",
+              "session_id": "urbanpay-fatima-20260608",
+              "messages": [
+                {"timestamp": "2026-06-08T13:40:00+05:00", "role": "customer", "text": "My wallet payment of PKR 4,800 failed but the balance was deducted."},
+                {"timestamp": "2026-06-08T13:44:00+05:00", "role": "assistant", "text": "Payment dispute UP-PAY-0608 was created for the failed transaction."},
+                {"timestamp": "2026-06-10T09:30:00+05:00", "role": "customer", "text": "The PKR 4,800 balance has been restored. The failed payment issue is resolved."}
+              ]
+            },
+            {
+              "month": "2026-07",
+              "session_id": "urbanpay-fatima-20260719",
+              "messages": [
+                {"timestamp": "2026-07-19T18:25:00+05:00", "role": "customer", "text": "I see an unauthorized online charge of PKR 1,999 on my virtual card."},
+                {"timestamp": "2026-07-19T18:28:00+05:00", "role": "assistant", "text": "The virtual card was frozen and fraud case UP-FRAUD-0719 was opened."},
+                {"timestamp": "2026-07-23T12:10:00+05:00", "role": "customer", "text": "The unauthorized charge investigation is still pending and I need an urgent update."}
+              ]
+            }
+          ]
+        },
+        {
+          "display_name": "Hamza Ahmed",
+          "mobile_no": "+923332220002",
+          "sessions": [
+            {
+              "month": "2026-06",
+              "session_id": "urbanpay-hamza-20260621",
+              "messages": [
+                {"timestamp": "2026-06-21T15:15:00+05:00", "role": "customer", "text": "My identity verification keeps rejecting the back image of my CNIC."},
+                {"timestamp": "2026-06-21T15:20:00+05:00", "role": "assistant", "text": "KYC case UP-KYC-0621 was opened and manual document review was requested."},
+                {"timestamp": "2026-06-22T17:45:00+05:00", "role": "customer", "text": "Manual verification succeeded and my wallet is active. The KYC problem is resolved."}
+              ]
+            },
+            {
+              "month": "2026-07",
+              "session_id": "urbanpay-hamza-20260730",
+              "messages": [
+                {"timestamp": "2026-07-30T08:50:00+05:00", "role": "customer", "text": "My bank transfer to UrbanPay has been pending for six hours."},
+                {"timestamp": "2026-07-30T08:54:00+05:00", "role": "assistant", "text": "Transfer trace UP-BANK-0730 was opened with the partner bank."},
+                {"timestamp": "2026-07-30T14:35:00+05:00", "role": "customer", "text": "The transfer arrived after the trace. The July bank transfer issue is resolved."}
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

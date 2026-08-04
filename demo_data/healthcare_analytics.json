@@ -1,0 +1,21 @@
+{
+  "tenant_id": "tenant-carepoint-003",
+  "organization_id": "carepoint-clinic",
+  "organization_name": "CarePoint Clinic Demo",
+  "organization_scope": "tenant-carepoint-003--carepoint-clinic",
+  "industry": "healthcare",
+  "events": [
+    {"id":"care-001","mobile_no":"+923333330001","session_id":"care-respiratory-01","role":"customer","timestamp":"2026-07-18T09:00:00+00:00","text":"I need a doctor appointment for a persistent cough and breathing difficulty."},
+    {"id":"care-002","mobile_no":"+923333330001","session_id":"care-respiratory-01","role":"assistant","timestamp":"2026-07-18T09:04:00+00:00","text":"A respiratory clinic appointment was scheduled for July 19."},
+    {"id":"care-003","mobile_no":"+923333330001","session_id":"care-respiratory-01","role":"customer","timestamp":"2026-07-19T13:00:00+00:00","text":"The doctor visit is completed and my medication was prescribed."},
+    {"id":"care-004","mobile_no":"+923333330002","session_id":"care-insurance-01","role":"customer","timestamp":"2026-07-23T10:30:00+00:00","text":"My insurance claim for the cardiology visit was rejected and I need help."},
+    {"id":"care-005","mobile_no":"+923333330002","session_id":"care-insurance-01","role":"assistant","timestamp":"2026-07-23T10:35:00+00:00","text":"The insurance documents were sent to the billing team for review."},
+    {"id":"care-006","mobile_no":"+923333330003","session_id":"care-medication-01","role":"customer","timestamp":"2026-07-26T08:15:00+00:00","text":"I need an urgent refill of my blood pressure medication."},
+    {"id":"care-007","mobile_no":"+923333330003","session_id":"care-medication-01","role":"assistant","timestamp":"2026-07-26T08:19:00+00:00","text":"The prescription refill request was forwarded to the doctor."},
+    {"id":"care-008","mobile_no":"+923333330003","session_id":"care-medication-01","role":"customer","timestamp":"2026-07-26T12:40:00+00:00","text":"The prescription refill was completed. Thank you."},
+    {"id":"care-009","mobile_no":"+923333330004","session_id":"care-dermatology-01","role":"customer","timestamp":"2026-07-30T14:10:00+00:00","text":"My skin rash is getting worse and I need a dermatology appointment."},
+    {"id":"care-010","mobile_no":"+923333330004","session_id":"care-dermatology-01","role":"assistant","timestamp":"2026-07-30T14:16:00+00:00","text":"The earliest dermatology appointment is being checked."},
+    {"id":"care-011","mobile_no":"+923333330005","session_id":"care-respiratory-02","role":"customer","timestamp":"2026-08-01T11:00:00+00:00","text":"My child has an asthma cough and needs a follow-up appointment."},
+    {"id":"care-012","mobile_no":"+923333330005","session_id":"care-respiratory-02","role":"assistant","timestamp":"2026-08-01T11:05:00+00:00","text":"A follow-up request was sent to the respiratory care team."}
+  ]
+}
