@@ -28,7 +28,7 @@ def create_app(store: MemoryStore | None = None, analytics_repository=None) -> F
     def authenticate():
         expected = os.getenv("SERVICE_API_KEY")
         if not expected or request.endpoint in {
-            "index", "health", "static", "custom_inbox", "organization_dashboard"
+            "index", "health", "static", "custom_inbox", "organization_dashboard", "list_demo_users"
         }:
             return None
         supplied = request.headers.get("X-API-Key", "")
@@ -85,6 +85,17 @@ def create_app(store: MemoryStore | None = None, analytics_repository=None) -> F
         )
         analytics.record_memory(record)
         return jsonify(record), 201
+
+    @app.get("/api/demo-users")
+    def list_demo_users():
+        with analytics._connect() as db:
+            rows = db.execute(
+                """SELECT p.organization_scope, p.mobile_no, p.current_issue, p.previous_session_count, o.organization_name
+                FROM customer_profiles p
+                JOIN organizations o ON p.organization_scope = o.organization_scope
+                ORDER BY p.memory_count DESC LIMIT 500"""
+            ).fetchall()
+        return jsonify({"users": [dict(row) for row in rows]})
 
     @app.get("/api/analytics/organizations")
     def analytics_organizations():
