@@ -367,10 +367,6 @@ class AnalyticsRepository:
         ] or summaries
         latest_session_id = active_summaries[0]["session_id"]
         latest_events = grouped[latest_session_id]
-        latest_customer = next(
-            (event for event in reversed(latest_events) if event["role"] != "assistant"),
-            latest_events[-1],
-        )
         latest_action = next(
             (event["text"] for event in reversed(latest_events) if event["role"] == "assistant"),
             "No previous support action is recorded.",
@@ -378,7 +374,7 @@ class AnalyticsRepository:
         status = active_summaries[0]["resolution_status"]
         category = active_summaries[0]["category"]
         next_action = recommended_action(category, status, self._industry(scope))
-        current_issue = concise_issue(latest_customer["text"])
+        current_issue = extract_core_issue(latest_events, self._industry(scope))
         profile_summary = (
             f"Current issue: {current_issue} Status: "
             f"{'Resolved' if status == 'resolved' else 'Unresolved'}. "
@@ -429,7 +425,24 @@ class AnalyticsRepository:
         events = sorted(events, key=lambda item: item["timestamp"])
         customer_events = [event for event in events if event["role"] != "assistant"]
         assistant_events = [event for event in events if event["role"] == "assistant"]
-        issue = (customer_events or events)[0]["text"]
+        
+        greetings = r"^(aoa|hello|hi|hey|yes|no|ok|okay|thanks|thank you|g|g ha|g support person se bat|g support person|bolain\??|bolain|plz|proceed)\.?$"
+        meaningful = None
+        for e in customer_events:
+            txt = e["text"].strip()
+            if not re.match(greetings, txt, re.I) and len(txt) > 3:
+                meaningful = txt
+                break
+        if not meaningful:
+            for e in customer_events:
+                txt = e["text"].strip()
+                if txt and not re.match(r"^(yes|no|ok|okay|g)\.?$", txt, re.I):
+                    meaningful = txt
+                    break
+            if not meaningful:
+                meaningful = (customer_events or events)[0]["text"]
+
+        issue = concise_issue(meaningful, limit=90)
         action = assistant_events[-1]["text"] if assistant_events else "No support action recorded."
         outcome = customer_events[-1]["text"] if len(customer_events) > 1 else "No outcome recorded."
         resolved = any(event["resolution_status"] == "resolved" for event in events)
@@ -572,3 +585,52 @@ def recommended_action(category: str, status: str, industry: str) -> str:
     return actions.get(industry, {}).get(
         category, "Review the latest case status and assign the correct specialist team."
     )
+
+
+def extract_core_issue(events: list[dict[str, Any]], industry: str) -> str:
+    """Extract the core issue/topic from a conversation session by analyzing all customer messages."""
+    customer_events = [e for e in events if e.get("role") != "assistant"]
+    if not customer_events:
+        return "No recent issue recorded."
+    
+    greetings = r"^(aoa|hello|hi|hey|yes|no|ok|okay|thanks|thank you|g|g ha|g support person se bat|g support person|bolain\??|bolain|plz|proceed)\.?$"
+    meaningful = None
+    for e in customer_events:
+        txt = e["text"].strip()
+        if not re.match(greetings, txt, re.I) and len(txt) > 3:
+            meaningful = txt
+            break
+            
+    if not meaningful:
+        for e in customer_events:
+            txt = e["text"].strip()
+            if txt and not re.match(r"^(yes|no|ok|okay|g)\.?$", txt, re.I):
+                meaningful = txt
+                break
+        if not meaningful:
+            meaningful = customer_events[0]["text"]
+            
+    if os.getenv("OLLAMA_SUMMARIZER_ENABLED", "false").lower() == "true":
+        try:
+            chronological = sorted(events, key=lambda item: str(item.get("timestamp", "")))
+            transcript = "\n".join(
+                f"{'Customer' if item.get('role') != 'assistant' else 'Support'}: {item.get('text', '')}"
+                for item in chronological
+            )
+            prompt = (
+                f"Read this conversation transcript. What is the core customer issue or request? "
+                f"Extract it in one concise sentence (maximum 12 words). "
+                f"Avoid generic replies, okays, greetings, or 'Yes'.\n\n"
+                f"Transcript:\n{transcript}\n\n"
+                f"Core Issue:"
+            )
+            from memory_summarizer import _ollama
+            generated = _ollama(prompt)
+            if generated:
+                cleaned = generated.strip().replace('"', '').replace("'", "")
+                if cleaned and len(cleaned) > 3 and not re.match(greetings, cleaned, re.I):
+                    return cleaned
+        except Exception:
+            pass
+            
+    return concise_issue(meaningful)
