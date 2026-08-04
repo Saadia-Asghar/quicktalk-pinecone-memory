@@ -290,6 +290,9 @@ class FreePineconeMem0MemoryStore(Mem0MemoryStore):
 def create_memory_store():
     """Select the configured infrastructure without importing Mem0 unnecessarily."""
     backend = os.getenv("MEMORY_BACKEND", "pinecone").lower()
+    if backend in ("mem0", "mem0-pinecone-free") and not os.getenv("PINECONE_API_KEY"):
+        from pinecone_memory import MemoryStore
+        return MemoryStore()
     if backend == "mem0":
         return Mem0MemoryStore()
     if backend == "mem0-local":

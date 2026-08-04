@@ -1,7 +1,6 @@
 """Vendor-neutral Flask tool registry for agent memory operations."""
 
-from __future__ import annotations
-
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from typing import Any
 
 from memory_summarizer import contextual_welcome
@@ -123,11 +122,21 @@ class ToolRegistry:
                 )
                 status = "Resolved" if profile["status"] == "resolved" else "Unresolved"
                 
-                # Fetch Mem0 memories
-                memories = self.store.recent(
-                    organization_id=arguments["organization_id"], mobile_no=arguments["mobile_no"]
-                )
-                mem0_facts = [m["text"] for m in memories if m.get("role") != "assistant"]
+                # Fetch Mem0 memories with a strict 1.5-second timeout
+                mem0_facts = []
+                try:
+                    with ThreadPoolExecutor(max_workers=1) as executor:
+                        future = executor.submit(
+                            self.store.recent,
+                            organization_id=arguments["organization_id"],
+                            mobile_no=arguments["mobile_no"]
+                        )
+                        memories = future.result(timeout=1.5)
+                        mem0_facts = [m["text"] for m in memories if m.get("role") != "assistant"]
+                except TimeoutError:
+                    print("Warning: Mem0 vector search timed out. Bypassing to keep response fast.")
+                except Exception as e:
+                    print(f"Warning: Failed to fetch Mem0 memories: {e}")
                 
                 return {
                     "organization_id": arguments["organization_id"],
@@ -152,9 +161,19 @@ class ToolRegistry:
                     "cache": profile["cache"],
                     "updated_at": profile.get("updated_at"),
                 }
-            memories = self.store.recent(
-                organization_id=arguments["organization_id"], mobile_no=arguments["mobile_no"]
-            )
+            
+            # Non-analytics fallback with timeout
+            memories = []
+            try:
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(
+                        self.store.recent,
+                        organization_id=arguments["organization_id"],
+                        mobile_no=arguments["mobile_no"]
+                    )
+                    memories = future.result(timeout=1.5)
+            except Exception as e:
+                print(f"Warning: Recent memory query failed: {e}")
             return {
                 "organization_id": arguments["organization_id"],
                 "mobile_no": arguments["mobile_no"],
@@ -166,9 +185,18 @@ class ToolRegistry:
             }
         if name == "get_contextual_welcome":
             self._require(arguments, "organization_id", "mobile_no")
-            memories = self.store.recent(
-                organization_id=arguments["organization_id"], mobile_no=arguments["mobile_no"]
-            )
+            memories = []
+            try:
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(
+                        self.store.recent,
+                        organization_id=arguments["organization_id"],
+                        mobile_no=arguments["mobile_no"]
+                    )
+                    memories = future.result(timeout=1.5)
+            except Exception as e:
+                print(f"Warning: Mem0 welcome query failed or timed out: {e}")
+
             if memories:
                 welcome = contextual_welcome(memories)
                 return {
