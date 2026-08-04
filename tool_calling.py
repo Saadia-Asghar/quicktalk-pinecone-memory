@@ -158,29 +158,40 @@ class ToolRegistry:
             }
         if name == "get_contextual_welcome":
             self._require(arguments, "organization_id", "mobile_no")
+            memories = self.store.recent(
+                organization_id=arguments["organization_id"], mobile_no=arguments["mobile_no"]
+            )
+            if memories:
+                welcome = contextual_welcome(memories)
+                return {
+                    "organization_id": arguments["organization_id"],
+                    "mobile_no": arguments["mobile_no"],
+                    "welcome_message": welcome,
+                    "memory_count": len(memories),
+                    "source": "mem0-vector-store",
+                }
             if self.analytics:
                 profile = self.analytics.get_profile(
                     arguments["organization_id"], arguments["mobile_no"], session_limit=1
                 )
                 if profile["memory_count"]:
+                    short = profile["current_issue"].strip().rstrip(".!?")[:100]
                     return {
                         "organization_id": arguments["organization_id"],
                         "mobile_no": arguments["mobile_no"],
                         "welcome_message": (
-                            f"Hello! Is your previous issue—{profile['current_issue']}—resolved, "
-                            "or would you like more help today?"
+                            f"Hello! I see your last query was regarding \"{short}\". "
+                            "Has this been resolved, or can I help you further today?"
                         ),
                         "memory_count": profile["memory_count"],
                         "source": "precomputed-profile",
                     }
-            memories = self.store.recent(
-                organization_id=arguments["organization_id"], mobile_no=arguments["mobile_no"]
-            )
             return {
                 "organization_id": arguments["organization_id"],
                 "mobile_no": arguments["mobile_no"],
-                "welcome_message": contextual_welcome(memories),
-                "memory_count": len(memories),
+                "welcome_message": "Hello! How can I help you today?",
+                "memory_count": 0,
+                "source": "default",
             }
         raise KeyError(name)
 

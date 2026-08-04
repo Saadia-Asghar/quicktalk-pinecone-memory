@@ -130,4 +130,4 @@ def _fallback_summary(memories: list[dict[str, Any]]) -> str:
 
 def _fallback_welcome(latest: str) -> str:
     short = latest.strip().rstrip(".!?")[:100]
-    return f"Hello! Is your previous issue—{short}—resolved, or would you like more help today?"
+    return f"Hello! I see your last query was regarding \"{short}\". Has this been resolved, or can I help you further today?"
