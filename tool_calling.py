@@ -122,6 +122,13 @@ class ToolRegistry:
                     arguments["organization_id"], arguments["mobile_no"], session_limit=5
                 )
                 status = "Resolved" if profile["status"] == "resolved" else "Unresolved"
+                
+                # Fetch Mem0 memories
+                memories = self.store.recent(
+                    organization_id=arguments["organization_id"], mobile_no=arguments["mobile_no"]
+                )
+                mem0_facts = [m["text"] for m in memories if m.get("role") != "assistant"]
+                
                 return {
                     "organization_id": arguments["organization_id"],
                     "mobile_no": arguments["mobile_no"],
@@ -132,6 +139,7 @@ class ToolRegistry:
                     ],
                     "memory_count": profile["memory_count"],
                     "memories": [],
+                    "mem0_facts": mem0_facts,
                     "profile_summary": profile["profile_summary"],
                     "current_issue": profile["current_issue"],
                     "status": profile["status"],
