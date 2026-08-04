@@ -71,6 +71,16 @@ def main() -> None:
             )
             loaded += 1
 
+    import_path = Path(r"D:\hp2\Downloads\last week data userData.history.json")
+    if import_path.exists():
+        try:
+            from import_userdata_history import main as import_history
+            import_history()
+            from backfill_profiles import main as backfill
+            backfill()
+        except Exception as e:
+            print(f"Warning: Failed to import user history: {e}")
+
     print(json.dumps({"status": "PASS", "organizations": 3, "events_processed": loaded}, indent=2))
 
 

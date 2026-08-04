@@ -93,7 +93,7 @@ def create_app(store: MemoryStore | None = None, analytics_repository=None) -> F
                 """SELECT p.organization_scope, p.mobile_no, p.current_issue, p.previous_session_count, o.organization_name
                 FROM customer_profiles p
                 JOIN organizations o ON p.organization_scope = o.organization_scope
-                ORDER BY p.memory_count DESC LIMIT 500"""
+                ORDER BY p.memory_count DESC LIMIT 3000"""
             ).fetchall()
         return jsonify({"users": [dict(row) for row in rows]})
 
