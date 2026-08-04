@@ -28,7 +28,7 @@ def create_app(store: MemoryStore | None = None, analytics_repository=None) -> F
     def authenticate():
         expected = os.getenv("SERVICE_API_KEY")
         if not expected or request.endpoint in {
-            "index", "health", "static", "custom_inbox", "organization_dashboard", "list_demo_users"
+            "index", "health", "static", "custom_inbox", "organization_dashboard", "list_demo_users", "session_messages"
         }:
             return None
         supplied = request.headers.get("X-API-Key", "")
@@ -96,6 +96,19 @@ def create_app(store: MemoryStore | None = None, analytics_repository=None) -> F
                 ORDER BY p.memory_count DESC LIMIT 3000"""
             ).fetchall()
         return jsonify({"users": [dict(row) for row in rows]})
+
+    @app.get("/api/sessions/<session_id>/messages")
+    def session_messages(session_id: str):
+        organization_id = request.args.get("organization_id", "")
+        if not organization_id:
+            raise BadRequest("organization_id is required")
+        with analytics._connect() as db:
+            rows = db.execute(
+                """SELECT role, text, timestamp FROM memory_events
+                WHERE organization_scope=? AND session_id=?
+                ORDER BY timestamp ASC""", (organization_id, session_id),
+            ).fetchall()
+        return jsonify({"messages": [dict(row) for row in rows]})
 
     @app.get("/api/analytics/organizations")
     def analytics_organizations():
