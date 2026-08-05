@@ -290,10 +290,73 @@ class FreePineconeMem0MemoryStore(Mem0MemoryStore):
             return self._clients[namespace]
 
 
+class GeminiPineconeMem0MemoryStore(Mem0MemoryStore):
+    """Mem0 using Google's free-tier Gemini API and Pinecone vector store."""
+
+    def __init__(self) -> None:
+        if not os.getenv("PINECONE_API_KEY"):
+            raise RuntimeError("Gemini mode requires PINECONE_API_KEY")
+        self._clients: dict[str, Any] = {}
+        self._lock = threading.Lock()
+
+    @property
+    def backend(self) -> str:
+        return "mem0-gemini-pinecone"
+
+    @property
+    def infer_memories(self) -> bool:
+        return True
+
+    def _client(self, organization_id: str):
+        namespace = _namespace(organization_id)
+        with self._lock:
+            if namespace not in self._clients:
+                from mem0 import Memory
+
+                dimensions = int(os.getenv("MEM0_EMBEDDING_DIMENSION", "768"))
+                config = {
+                    "llm": {
+                        "provider": "gemini",
+                        "config": {
+                            "model": os.getenv("MEM0_GEMINI_MODEL", "gemini-1.5-flash"),
+                            "temperature": 0.2,
+                            "max_tokens": 1200
+                        }
+                    },
+                    "embedder": {
+                        "provider": "gemini",
+                        "config": {
+                            "model": os.getenv("MEM0_GEMINI_EMBEDDING_MODEL", "models/text-embedding-004"),
+                            "embedding_dims": dimensions
+                        }
+                    },
+                    "vector_store": {
+                        "provider": "pinecone",
+                        "config": {
+                            "collection_name": os.getenv("MEM0_PINECONE_INDEX", "quicktalk-mem0"),
+                            "embedding_model_dims": dimensions,
+                            "namespace": namespace,
+                            "serverless_config": {
+                                "cloud": os.getenv("PINECONE_CLOUD", "aws"),
+                                "region": os.getenv("PINECONE_REGION", "us-east-1"),
+                            },
+                            "metric": "cosine",
+                        },
+                    },
+                    "history_db_path": os.getenv("MEM0_HISTORY_DB", "data/mem0_history.db"),
+                    "custom_instructions": (
+                        "Extract durable contact-center facts, customer preferences, active issues, "
+                        "resolutions, and sentiment. Never merge identities or organizations."
+                    ),
+                }
+                self._clients[namespace] = Memory.from_config(config)
+            return self._clients[namespace]
+
+
 def create_memory_store():
     """Select the configured infrastructure without importing Mem0 unnecessarily."""
     backend = os.getenv("MEMORY_BACKEND", "pinecone").lower()
-    if backend in ("mem0", "mem0-pinecone-free") and not os.getenv("PINECONE_API_KEY"):
+    if backend in ("mem0", "mem0-pinecone-free", "mem0-gemini") and not os.getenv("PINECONE_API_KEY"):
         from pinecone_memory import MemoryStore
         return MemoryStore()
     if backend == "mem0":
@@ -302,6 +365,8 @@ def create_memory_store():
         return FreeLocalMem0MemoryStore()
     if backend == "mem0-pinecone-free":
         return FreePineconeMem0MemoryStore()
+    if backend == "mem0-gemini":
+        return GeminiPineconeMem0MemoryStore()
     from pinecone_memory import MemoryStore
 
     return MemoryStore()

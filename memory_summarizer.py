@@ -105,6 +105,36 @@ def _summarize_session(session_id: str, items: list[dict[str, Any]]) -> dict[str
 
 
 def _ollama(prompt: str) -> str | None:
+    # 1. Gemini API Routing (Free-Tier Google AI Studio)
+    gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if gemini_key and os.getenv("GEMINI_SUMMARIZER_ENABLED", "false").lower() == "true":
+        model = os.getenv("MEM0_GEMINI_MODEL", "gemini-1.5-flash")
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={gemini_key}"
+        payload = json.dumps({
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0.2,
+                "maxOutputTokens": int(os.getenv("OLLAMA_SUMMARIZER_MAX_TOKENS", "120"))
+            }
+        }).encode("utf-8")
+        request = urllib.request.Request(
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=10.0) as response:
+                result = json.loads(response.read().decode("utf-8"))
+            candidates = result.get("candidates", [])
+            if candidates:
+                parts = candidates[0].get("content", {}).get("parts", [])
+                if parts:
+                    return str(parts[0].get("text", "")).strip()
+        except Exception as e:
+            print(f"Warning: Gemini API call failed: {e}")
+
+    # 2. Local Ollama Fallback
     if os.getenv("OLLAMA_SUMMARIZER_ENABLED", "false").lower() != "true":
         return None
     payload = json.dumps(
