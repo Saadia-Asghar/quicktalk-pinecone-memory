@@ -169,7 +169,7 @@ class FreeLocalMem0MemoryStore(Mem0MemoryStore):
 
     @property
     def infer_memories(self) -> bool:
-        return os.getenv("MEM0_LOCAL_INFER", "true").lower() == "true"
+        return os.getenv("MEM0_LOCAL_INFER", "false").lower() == "true"
 
     def _client(self, organization_id: str):
         namespace = _namespace(organization_id)
