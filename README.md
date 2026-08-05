@@ -133,6 +133,31 @@ python pinecone_integration_test.py
 See [PINECONE_LIVE_TEST_REPORT.md](PINECONE_LIVE_TEST_REPORT.md) for the
 verified free-tier test path and result.
 
+## Google Gemini Free Tier Integration (Efficient & High Performance)
+
+For production-grade testing without subscription fees, you can use the **Google Gemini API** (Google AI Studio Free Tier). This uses **Gemini 1.5 Flash** for instruction-following and Roman Urdu comprehension, alongside the state-of-the-art **`text-embedding-004`** model.
+
+To enable this on the `gemini-integration` branch, configure these variables in your `.env` file:
+
+```env
+# Enable Gemini for Mem0 long-term memory
+MEMORY_BACKEND=mem0-gemini
+MEM0_GEMINI_MODEL=gemini-1.5-flash
+MEM0_GEMINI_EMBEDDING_MODEL=models/text-embedding-004
+MEM0_EMBEDDING_DIMENSION=768
+MEM0_PINECONE_INDEX=quicktalk-mem0-free
+
+# Enable Gemini for real-time session summaries
+GEMINI_SUMMARIZER_ENABLED=true
+
+# Add your Gemini API key (copied from aistudio.google.com)
+GEMINI_API_KEY=your-gemini-api-key-here
+GOOGLE_API_KEY=your-gemini-api-key-here
+
+# Pinecone key is still required for the vector database layer
+PINECONE_API_KEY=your-pinecone-key
+```
+
 ## API overview
 
 | Method | Endpoint | Purpose |
