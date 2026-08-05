@@ -6,6 +6,7 @@ import json
 import os
 import re
 import urllib.request
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -29,34 +30,41 @@ def clean_memory_text(text: str) -> str:
     return text.strip()
 
 
-def contextual_welcome(memories: list[dict[str, Any]]) -> str:
-    customer_memories = [item for item in memories if item.get("role") != "assistant"]
-    if not customer_memories:
-        return "Hello! How can I help you today?"
-        
+def contextual_welcome(memories: list[dict[str, Any]], latest_session_summary: str = "") -> str:
+    """Generate a warm, context-aware welcome using the latest session summary if available."""
     from analytics import is_greeting
+
+    # Prefer the structured LLM-generated session summary (Issue/Action/Outcome format)
+    context_text = ""
+    if latest_session_summary and "issue:" in latest_session_summary.lower():
+        # Extract Issue portion for a focused welcome
+        issue_match = re.search(r"issue:\s*(.*?)(?:\s+action:|\s*$)", latest_session_summary, re.I | re.DOTALL)
+        context_text = issue_match.group(1).strip() if issue_match else clean_memory_text(latest_session_summary)
     
-    latest_meaningful = None
-    for item in customer_memories:
-        txt = clean_memory_text(str(item.get("text", "")))
-        if not is_greeting(txt):
-            latest_meaningful = txt
-            break
-            
-    if not latest_meaningful:
+    # Fall back to raw memories if no structured summary
+    if not context_text:
+        customer_memories = [item for item in memories if item.get("role") != "assistant"]
+        for item in customer_memories:
+            txt = clean_memory_text(str(item.get("text", "")))
+            if txt and not is_greeting(txt):
+                context_text = txt
+                break
+
+    if not context_text:
         return "Hello! How can I help you today?"
-        
+
     prompt = (
-        "Write one friendly customer-support welcome sentence based only on the latest memory. "
-        "Ask whether the previous issue is resolved or offer to continue helping. Do not mention "
-        "databases, memory, or internal systems. Maximum 25 words.\n\nLatest memory: "
-        + latest_meaningful
+        "You are a warm, friendly customer support agent. Write ONE welcome sentence to greet a returning customer. "
+        "Reference their previous issue naturally and ask if it has been resolved or if they need further help. "
+        "Do NOT use hyphens or em-dashes. Do NOT mention databases, memory, or AI. Maximum 25 words.\n\n"
+        f"Customer's previous issue: {context_text}\n\nWelcome message:"
     )
     generated = _ollama(prompt)
     if generated:
+        # Strip surrounding quotes if the LLM added them
         quoted = re.findall(r'"([^"\n]+)"', generated)
         return (quoted[-1] if quoted else generated).strip()
-    return _fallback_welcome(latest_meaningful)
+    return _fallback_welcome(context_text)
 
 
 def summarize_sessions(memories: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -105,7 +113,56 @@ def _summarize_session(session_id: str, items: list[dict[str, Any]]) -> dict[str
 
 
 def _ollama(prompt: str) -> str | None:
-    # 1. Gemini API Routing (Free-Tier Google AI Studio)
+    # 1. Groq API Routing (Free-Tier Developer Plan)
+    groq_key = os.getenv("GROQ_API_KEY")
+    if groq_key and os.getenv("GROQ_SUMMARIZER_ENABLED", "false").lower() == "true":
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        payload = json.dumps({
+            "model": os.getenv("MEM0_GROQ_MODEL", "llama-3.3-70b-versatile"),
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.2,
+            "max_tokens": int(os.getenv("OLLAMA_SUMMARIZER_MAX_TOKENS", "120"))
+        }).encode("utf-8")
+        request = urllib.request.Request(
+            url,
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {groq_key}",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            },
+            method="POST",
+        )
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                with urllib.request.urlopen(request, timeout=10.0) as response:
+                    result = json.loads(response.read().decode("utf-8"))
+                choices = result.get("choices", [])
+                if choices:
+                    return str(choices[0].get("message", {}).get("content", "")).strip()
+            except urllib.error.HTTPError as e:
+                if e.code == 429 and attempt < max_retries - 1:
+                    retry_after = 15.0
+                    try:
+                        err_body = json.loads(e.read().decode("utf-8"))
+                        msg = err_body.get("error", {}).get("message", "")
+                        # Matches "try again in X.XXs" or "retry in X.XXs"
+                        match = re.search(r"(?:try\s+again|retry)\s+in\s+([\d\.]+)", msg, re.I)
+                        if match:
+                            retry_after = float(match.group(1)) + 2.0
+                    except Exception:
+                        pass
+                    print(f"Groq 429 Rate Limit hit. Retrying in {retry_after:.2f}s...")
+                    time.sleep(retry_after)
+                else:
+                    print(f"Warning: Groq API call failed (attempt {attempt+1}): {e}")
+                    break
+            except Exception as e:
+                print(f"Warning: Groq API call failed (attempt {attempt+1}): {e}")
+                break
+
+    # 2. Gemini API Routing (Free-Tier Google AI Studio)
     gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if gemini_key and os.getenv("GEMINI_SUMMARIZER_ENABLED", "false").lower() == "true":
         model = os.getenv("MEM0_GEMINI_MODEL", "gemini-1.5-flash")
@@ -134,7 +191,7 @@ def _ollama(prompt: str) -> str | None:
         except Exception as e:
             print(f"Warning: Gemini API call failed: {e}")
 
-    # 2. Local Ollama Fallback
+    # 3. Local Ollama Fallback
     if os.getenv("OLLAMA_SUMMARIZER_ENABLED", "false").lower() != "true":
         return None
     payload = json.dumps(

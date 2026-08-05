@@ -399,7 +399,14 @@ class AnalyticsRepository:
         status = active_summaries[0]["resolution_status"]
         category = active_summaries[0]["category"]
         next_action = recommended_action(category, status, self._industry(scope))
-        current_issue = extract_core_issue(recent_events, self._industry(scope))
+        # Use the latest session summary (LLM-generated) as current issue instead of raw heuristic
+        latest_summary_text = active_summaries[0].get("summary", "")
+        if latest_summary_text and "issue:" in latest_summary_text.lower():
+            # Extract Issue: portion from the structured summary
+            issue_match = re.search(r"issue:\s*(.*?)(?:\s+action:|\s*$)", latest_summary_text, re.I | re.DOTALL)
+            current_issue = issue_match.group(1).strip() if issue_match else concise_issue(latest_summary_text, 110)
+        else:
+            current_issue = extract_core_issue(recent_events, self._industry(scope))
         profile_summary = (
             f"Current issue: {current_issue} Status: "
             f"{'Resolved' if status == 'resolved' else 'Unresolved'}. "
@@ -453,8 +460,13 @@ class AnalyticsRepository:
         resolved = any(event["resolution_status"] == "resolved" for event in events)
         category = Counter(event["category"] for event in customer_events or events).most_common(1)[0][0]
         
-        # 1. Try LLM-based session summary of the entire chat history if enabled
-        if os.getenv("OLLAMA_SUMMARIZER_ENABLED", "false").lower() == "true":
+        # 1. Try LLM-based session summary (Groq, Gemini, or Ollama cloud summarizer)
+        _any_llm_enabled = (
+            os.getenv("GROQ_SUMMARIZER_ENABLED", "false").lower() == "true"
+            or os.getenv("GEMINI_SUMMARIZER_ENABLED", "false").lower() == "true"
+            or os.getenv("OLLAMA_SUMMARIZER_ENABLED", "false").lower() == "true"
+        )
+        if _any_llm_enabled:
             try:
                 from memory_summarizer import _ollama
                 transcript = "\n".join(
@@ -462,48 +474,50 @@ class AnalyticsRepository:
                     for item in events
                 )
                 prompt = (
-                    "Summarize this customer support chat session in a single sentence describing: "
-                    "1. What the customer wanted (Issue).\n"
-                    "2. What support did (Action).\n"
-                    "3. The final result (Outcome).\n\n"
-                    "Format the output strictly as: 'Issue: <text> Action: <text> Outcome: <text>'. "
-                    "Do not include any other text. Keep it under 25 words.\n\n"
-                    f"Transcript:\n{transcript}\n\n"
-                    "Summary:"
+                    "You are a contact center assistant. Summarize this chat session in the exact format below.\n"
+                    "Format: Issue: <what the customer wanted> | Action: <what support did> | Outcome: <final result>\n"
+                    "Rules: Be specific with names, amounts, doctor names if mentioned. Max 30 words total. "
+                    "Only output the formatted line, nothing else.\n\n"
+                    f"Chat Transcript:\n{transcript}\n\nSummary:"
                 )
                 generated = _ollama(prompt)
-                if generated and "issue:" in generated.lower() and "action:" in generated.lower():
-                    summary = generated.strip().replace("\n", " ").replace('"', '').replace("'", "")
-                    return {
-                        "organization_scope": scope, "mobile_no": mobile_no,
-                        "session_id": events[0]["session_id"], "started_at": events[0]["timestamp"],
-                        "ended_at": events[-1]["timestamp"], "message_count": len(events), "category": category,
-                        "resolution_status": "resolved" if resolved else "not_recorded",
-                        "summary": summary,
-                    }
+                if generated:
+                    cleaned = generated.strip().replace('"', '').replace("'", "").replace("\n", " ")
+                    # Accept if it has at least Issue: in it
+                    if "issue:" in cleaned.lower():
+                        # Normalize separator: support both | and plain spacing
+                        cleaned = re.sub(r"\s*\|\s*", " ", cleaned)
+                        return {
+                            "organization_scope": scope, "mobile_no": mobile_no,
+                            "session_id": events[0]["session_id"], "started_at": events[0]["timestamp"],
+                            "ended_at": events[-1]["timestamp"], "message_count": len(events), "category": category,
+                            "resolution_status": "resolved" if resolved else "not_recorded",
+                            "summary": cleaned,
+                        }
             except Exception:
                 pass
 
-        # 2. Heuristic fallback (if LLM is disabled or fails)
-        meaningful = None
+        # 2. Smart heuristic fallback — reads full transcript to find best Issue/Action/Outcome
+        # Find most informative customer message (highest score)
+        scored = []
         for e in customer_events:
             txt = e["text"].strip()
-            if not is_greeting(txt) and len(txt) > 3:
-                meaningful = txt
-                break
-        if not meaningful:
-            for e in customer_events:
-                txt = e["text"].strip()
-                if txt and not is_greeting(txt):
-                    meaningful = txt
-                    break
-            if not meaningful:
-                meaningful = (customer_events or events)[0]["text"]
+            if is_greeting(txt) or len(txt) <= 2:
+                continue
+            score = len(txt)
+            if re.search(r"\b(dr|doctor|appointment|book|fee|bill|payment|internet|connectivity|speed|plan|upgrade|medicine|report|claim|insurance|transfer|fraud|kyc)\b", txt, re.I):
+                score += 200
+            scored.append((score, txt))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        meaningful = scored[0][1] if scored else ((customer_events or events)[0]["text"])
 
-        issue = concise_issue(meaningful, limit=90)
-        action = assistant_events[-1]["text"] if assistant_events else "No support action recorded."
-        outcome = customer_events[-1]["text"] if len(customer_events) > 1 else "No outcome recorded."
-        
+        issue = concise_issue(meaningful, limit=100)
+        # Last assistant reply as action
+        action = concise_issue(assistant_events[-1]["text"], limit=100) if assistant_events else "No support action recorded."
+        # Last customer reply as outcome (if different from issue)
+        last_customer_txt = customer_events[-1]["text"].strip() if customer_events else ""
+        outcome = concise_issue(last_customer_txt, limit=100) if last_customer_txt and last_customer_txt != meaningful else "Pending response."
+
         return {
             "organization_scope": scope, "mobile_no": mobile_no,
             "session_id": events[0]["session_id"], "started_at": events[0]["timestamp"],

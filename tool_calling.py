@@ -212,49 +212,40 @@ class ToolRegistry:
             }
         if name == "get_contextual_welcome":
             self._require(arguments, "organization_id", "mobile_no")
+            org_id = arguments["organization_id"]
+            mobile = arguments["mobile_no"]
+
+            # 1. Get the latest session summary from SQLite (fast, no vector lookup)
+            latest_session_summary = ""
+            if self.analytics:
+                try:
+                    profile = self.analytics.get_profile(org_id, mobile, session_limit=1)
+                    summaries = profile.get("session_summaries", [])
+                    if summaries:
+                        latest_session_summary = summaries[0].get("summary", "")
+                except Exception as e:
+                    print(f"Warning: Could not load session summary for welcome: {e}")
+
+            # 2. Optionally fetch Mem0 memories as fallback (with strict timeout)
             memories = []
             try:
                 with ThreadPoolExecutor(max_workers=1) as executor:
                     future = executor.submit(
                         self.store.recent,
-                        organization_id=arguments["organization_id"],
-                        mobile_no=arguments["mobile_no"]
+                        organization_id=org_id,
+                        mobile_no=mobile
                     )
                     memories = future.result(timeout=1.5)
             except Exception as e:
                 print(f"Warning: Mem0 welcome query failed or timed out: {e}")
 
-            if memories:
-                welcome = contextual_welcome(memories)
-                return {
-                    "organization_id": arguments["organization_id"],
-                    "mobile_no": arguments["mobile_no"],
-                    "welcome_message": welcome,
-                    "memory_count": len(memories),
-                    "source": "mem0-vector-store",
-                }
-            if self.analytics:
-                profile = self.analytics.get_profile(
-                    arguments["organization_id"], arguments["mobile_no"], session_limit=1
-                )
-                if profile["memory_count"]:
-                    short = profile["current_issue"].strip().rstrip(".!?")[:100]
-                    return {
-                        "organization_id": arguments["organization_id"],
-                        "mobile_no": arguments["mobile_no"],
-                        "welcome_message": (
-                            f"Hello! I see your last query was regarding \"{short}\". "
-                            "Has this been resolved, or can I help you further today?"
-                        ),
-                        "memory_count": profile["memory_count"],
-                        "source": "precomputed-profile",
-                    }
+            welcome = contextual_welcome(memories, latest_session_summary=latest_session_summary)
             return {
-                "organization_id": arguments["organization_id"],
-                "mobile_no": arguments["mobile_no"],
-                "welcome_message": "Hello! How can I help you today?",
-                "memory_count": 0,
-                "source": "default",
+                "organization_id": org_id,
+                "mobile_no": mobile,
+                "welcome_message": welcome,
+                "memory_count": len(memories),
+                "source": "session-summary" if latest_session_summary else ("mem0-vector-store" if memories else "default"),
             }
         raise KeyError(name)
 
