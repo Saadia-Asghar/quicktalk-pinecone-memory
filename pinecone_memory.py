@@ -83,7 +83,8 @@ class MemoryStore:
         return "pinecone" if self._index else "local-fallback"
 
     def add(self, *, organization_id: str, session_id: str, mobile_no: str,
-            text: str, role: str = "customer", timestamp: str | None = None) -> dict[str, Any]:
+            text: str, role: str = "customer", timestamp: str | None = None,
+            infer: bool | None = None) -> dict[str, Any]:
         if not session_id.strip() or not text.strip():
             raise ValueError("session_id and text are required")
         mobile = normalize_mobile(mobile_no)

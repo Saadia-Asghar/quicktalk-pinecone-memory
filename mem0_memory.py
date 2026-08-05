@@ -80,7 +80,8 @@ class Mem0MemoryStore:
             return self._clients[namespace]
 
     def add(self, *, organization_id: str, session_id: str, mobile_no: str,
-            text: str, role: str = "customer", timestamp: str | None = None) -> dict[str, Any]:
+            text: str, role: str = "customer", timestamp: str | None = None,
+            infer: bool | None = None) -> dict[str, Any]:
         if not organization_id.strip() or not session_id.strip() or not text.strip():
             raise ValueError("organization_id, session_id and text are required")
         mobile = normalize_mobile(mobile_no)
@@ -93,11 +94,13 @@ class Mem0MemoryStore:
             "role": validate_role(role),
             "text": text.strip(),
         }
+        mem0_role = "user" if role == "customer" else "assistant" if role == "assistant" else "system"
+        infer_val = infer if infer is not None else self.infer_memories
         self._client(organization_id).add(
-            [{"role": role, "content": record["text"]}],
+            [{"role": mem0_role, "content": record["text"]}],
             user_id=self._customer_id(organization_id, mobile),
             metadata=record,
-            infer=self.infer_memories,
+            infer=infer_val,
         )
         return record
 
@@ -118,7 +121,7 @@ class Mem0MemoryStore:
         normalized = []
         for item in results or []:
             metadata = dict(item.get("metadata") or {})
-            metadata.setdefault("text", item.get("memory", ""))
+            metadata["text"] = item.get("memory", metadata.get("text", ""))
             metadata["score"] = item.get("score", 0)
             normalized.append(metadata)
         return normalized
@@ -132,7 +135,7 @@ class Mem0MemoryStore:
         items = []
         for item in results or []:
             metadata = dict(item.get("metadata") or {})
-            metadata.setdefault("text", item.get("memory", ""))
+            metadata["text"] = item.get("memory", metadata.get("text", ""))
             items.append(metadata)
         now = datetime.now(timezone.utc)
         filtered = []

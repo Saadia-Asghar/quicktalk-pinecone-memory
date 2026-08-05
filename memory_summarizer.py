@@ -21,22 +21,42 @@ def summarize_profile(memories: list[dict[str, Any]]) -> str:
     return _ollama(prompt) or _fallback_summary(memories)
 
 
+def clean_memory_text(text: str) -> str:
+    """Extract the core issue text from a session summary string."""
+    match = re.search(r"Issue:\s*(.*?)(?=\s*(?:Action:|Outcome:|$))", text, re.DOTALL | re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    return text.strip()
+
+
 def contextual_welcome(memories: list[dict[str, Any]]) -> str:
     customer_memories = [item for item in memories if item.get("role") != "assistant"]
     if not customer_memories:
         return "Hello! How can I help you today?"
-    latest = customer_memories[0]
+        
+    from analytics import is_greeting
+    
+    latest_meaningful = None
+    for item in customer_memories:
+        txt = clean_memory_text(str(item.get("text", "")))
+        if not is_greeting(txt):
+            latest_meaningful = txt
+            break
+            
+    if not latest_meaningful:
+        return "Hello! How can I help you today?"
+        
     prompt = (
         "Write one friendly customer-support welcome sentence based only on the latest memory. "
         "Ask whether the previous issue is resolved or offer to continue helping. Do not mention "
         "databases, memory, or internal systems. Maximum 25 words.\n\nLatest memory: "
-        + str(latest.get("text", ""))
+        + latest_meaningful
     )
     generated = _ollama(prompt)
     if generated:
         quoted = re.findall(r'"([^"\n]+)"', generated)
         return (quoted[-1] if quoted else generated).strip()
-    return _fallback_welcome(str(latest.get("text", "")))
+    return _fallback_welcome(latest_meaningful)
 
 
 def summarize_sessions(memories: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -129,5 +149,8 @@ def _fallback_summary(memories: list[dict[str, Any]]) -> str:
 
 
 def _fallback_welcome(latest: str) -> str:
-    short = latest.strip().rstrip(".!?")[:100]
+    from analytics import is_greeting
+    short = clean_memory_text(latest).rstrip(".!?")[:100]
+    if is_greeting(short):
+        return "Hello! Has your issue been resolved, or can I help you further today?"
     return f"Hello! I see your last query was regarding \"{short}\". Has this been resolved, or can I help you further today?"

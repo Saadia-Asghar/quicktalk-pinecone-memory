@@ -82,6 +82,7 @@ def create_app(store: MemoryStore | None = None, analytics_repository=None) -> F
             organization_id=body["organization_id"], session_id=body["session_id"],
             mobile_no=body["mobile_no"], text=body["text"],
             role=body.get("role", "customer"), timestamp=body.get("timestamp"),
+            infer=False,
         )
         analytics.record_memory(record)
         return jsonify(record), 201

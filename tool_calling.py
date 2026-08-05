@@ -116,10 +116,37 @@ class ToolRegistry:
             return {"items": items, "count": len(items)}
         if name == "get_handoff_context":
             self._require(arguments, "organization_id", "mobile_no")
+            org_id = arguments["organization_id"]
+            mobile = arguments["mobile_no"]
             if self.analytics:
-                profile = self.analytics.get_profile(
-                    arguments["organization_id"], arguments["mobile_no"], session_limit=5
-                )
+                profile = self.analytics.get_profile(org_id, mobile, session_limit=5)
+                
+                # Automatically push latest session summary to Mem0 with infer=True (memory extraction) on escalation
+                if profile.get("session_summaries"):
+                    latest_sess = profile["session_summaries"][0]
+                    latest_session_id = latest_sess["session_id"]
+                    latest_summary = latest_sess["summary"]
+                    
+                    try:
+                        existing = self.store.search(
+                            organization_id=org_id,
+                            mobile_no=mobile,
+                            session_id=latest_session_id,
+                            limit=1
+                        )
+                        if not existing:
+                            print(f"Session {latest_session_id} escalated. Pushing summary to Mem0...")
+                            self.store.add(
+                                organization_id=org_id,
+                                session_id=latest_session_id,
+                                mobile_no=mobile,
+                                text=latest_summary,
+                                role="customer",
+                                infer=True
+                            )
+                    except Exception as e:
+                        print(f"Warning: Failed to verify/push session summary to Mem0: {e}")
+                
                 status = "Resolved" if profile["status"] == "resolved" else "Unresolved"
                 
                 # Fetch Mem0 memories with a strict 1.5-second timeout
@@ -128,8 +155,8 @@ class ToolRegistry:
                     with ThreadPoolExecutor(max_workers=1) as executor:
                         future = executor.submit(
                             self.store.recent,
-                            organization_id=arguments["organization_id"],
-                            mobile_no=arguments["mobile_no"]
+                            organization_id=org_id,
+                            mobile_no=mobile
                         )
                         memories = future.result(timeout=1.5)
                         mem0_facts = [m["text"] for m in memories if m.get("role") != "assistant"]
