@@ -158,6 +158,24 @@ GOOGLE_API_KEY=your-gemini-api-key-here
 PINECONE_API_KEY=your-pinecone-key
 ```
 
+## System Architecture & How It Works
+
+To support live production workloads, the system separates real-time operations (low latency) from long-term memory synthesis (high quality):
+
+### 1. Two-Tier Memory Write Strategy
+*   **Real-time Writes (Live Chat)**: When customer or support messages arrive, they are saved instantly to the local SQLite database (`memory_events` table) and logged to the vector database (`Mem0` + `Pinecone`) with `infer=False`. **This bypasses LLM inference entirely during live chat, keeping write latency under 20ms.**
+*   **Session-End Synthesis (Escalation & Handoff)**: When a support agent opens a customer or escalates a chat, the system compiles the entire session transcript into a structured summary:
+    `Issue: <Initial customer issue> Action: <Last support action> Outcome: <Customer response>`
+    This clean, consolidated summary is pushed to Mem0 with `infer=True`, triggering the Gemini API to extract high-level, durable user preferences and facts.
+
+### 2. High-Performance SQLite Caching
+*   To prevent redundant LLM/Ollama network requests, the system stores computed session summaries in SQLite.
+*   Upon profile fetching, it checks the database. If the message count of a session matches the cached count, it reuses the summary instantly (0ms latency), making profile switching in the dashboard extremely fast.
+
+### 3. Typo-Tolerant Greeting Filtering
+*   Common Urdu, Arabic, and English greeting inputs and typos (e.g. `aoa`, `salam`, `Asalamad u aliakum`, `hello`) are automatically detected and filtered using the `is_greeting` classifier.
+*   This prevents greeting noise from showing up in your vector database or appearing in the contextual greeting welcome message.
+
 ## API overview
 
 | Method | Endpoint | Purpose |
