@@ -10,6 +10,19 @@ from datetime import datetime, timezone
 from typing import Any
 
 from pinecone_memory import _namespace, normalize_mobile, normalize_timestamp, validate_role
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
+
+
+def _extract_mem0_results(payload: Any) -> list[dict]:
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        for key in ("results", "memories", "data"):
+            if key in payload and isinstance(payload[key], list):
+                return payload[key]
+    return []
 
 
 class Mem0MemoryStore:
@@ -72,13 +85,20 @@ class Mem0MemoryStore:
                     },
                     "history_db_path": os.getenv("MEM0_HISTORY_DB", "data/mem0_history.db"),
                     "custom_prompt": (
-                        "You are a highly selective memory extraction system for enterprise support logs. "
-                        "Your objective is to extract ONLY persistent user facts, entity IDs (such as MR Numbers), and explicit preferences. "
-                        "STRICT CONSTRAINTS: "
-                        "1. DO NOT extract greetings, polite remarks, or conversational filler. "
-                        "2. DO NOT extract temporary system error states or automated agent prompts ('Please wait...'). "
-                        "3. Keep extracted facts concise (maximum 10 words). "
-                        "4. If no permanent user entity or intent exists, return an empty set."
+                        "You are a memory extraction system for enterprise contact center logs.\n"
+                        "Your objective is to extract durable user facts, entity IDs (such as MR Numbers), patient names, doctor choices, appointment tokens, internet plans, and explicit preferences.\n"
+                        "STRICT CONSTRAINTS:\n"
+                        "1. DO NOT extract greetings, polite remarks, or conversational filler.\n"
+                        "2. DO extract patient names, MR numbers, doctor preferences, appointment dates/tokens, package names, and persistent issues.\n"
+                        "3. Keep extracted facts concise (maximum 15 words)."
+                    ),
+                    "custom_fact_extraction_prompt": (
+                        "You are a memory extraction system for enterprise contact center logs.\n"
+                        "Your objective is to extract durable user facts, entity IDs (such as MR Numbers), patient names, doctor choices, appointment tokens, internet plans, and explicit preferences.\n"
+                        "STRICT CONSTRAINTS:\n"
+                        "1. DO NOT extract greetings, polite remarks, or conversational filler.\n"
+                        "2. DO extract patient names, MR numbers, doctor preferences, appointment dates/tokens, package names, and persistent issues.\n"
+                        "3. Keep extracted facts concise (maximum 15 words)."
                     ),
                 }
                 self._clients[namespace] = Memory.from_config(config)
@@ -103,12 +123,15 @@ class Mem0MemoryStore:
             record.update(metadata)
         mem0_role = "user" if role == "customer" else "assistant" if role == "assistant" else "system"
         infer_val = infer if infer is not None else self.infer_memories
-        self._client(organization_id).add(
-            [{"role": mem0_role, "content": record["text"]}],
-            user_id=self._customer_id(organization_id, mobile),
-            metadata=record,
-            infer=infer_val,
-        )
+        try:
+            self._client(organization_id).add(
+                [{"role": mem0_role, "content": record["text"]}],
+                user_id=self._customer_id(organization_id, mobile),
+                metadata=record,
+                infer=infer_val,
+            )
+        except Exception as e:
+            print(f"Warning: Mem0 client add failed: {e}")
         return record
 
     def search(self, *, organization_id: str, mobile_no: str, query: str = "conversation history",
@@ -122,27 +145,29 @@ class Mem0MemoryStore:
             query,
             user_id=customer_id,
             filters=filters or None,
-            limit=min(limit, 3),  # Hard-capped to 3 to prevent memory noise
+            limit=min(limit, 50),
         )
-        results = response.get("results", []) if isinstance(response, dict) else response
+        results = _extract_mem0_results(response)
         normalized = []
-        for item in results or []:
+        for item in results:
             metadata = dict(item.get("metadata") or {})
-            metadata["text"] = item.get("memory", metadata.get("text", ""))
+            metadata["text"] = item.get("memory") or item.get("text") or metadata.get("text", "")
+            metadata["memory"] = item.get("memory") or metadata.get("text", "")
             metadata["score"] = item.get("score", 0)
             normalized.append(metadata)
         return normalized
 
     def recent(self, *, organization_id: str, mobile_no: str, limit: int = 100) -> list[dict[str, Any]]:
         mobile = normalize_mobile(mobile_no)
-        response = self._client(organization_id).get_all(
-            user_id=self._customer_id(organization_id, mobile), limit=min(limit, 100)
-        )
-        results = response.get("results", []) if isinstance(response, dict) else response
+        cid = self._customer_id(organization_id, mobile)
+        response = self._client(organization_id).get_all(user_id=cid, limit=min(limit, 100))
+        print(f"[DEBUG MEM0 RECENT] cid={cid} response={response}")
+        results = _extract_mem0_results(response)
         items = []
-        for item in results or []:
+        for item in results:
             metadata = dict(item.get("metadata") or {})
-            metadata["text"] = item.get("memory", metadata.get("text", ""))
+            metadata["text"] = item.get("memory") or item.get("text") or metadata.get("text", "")
+            metadata["memory"] = item.get("memory") or metadata.get("text", "")
             items.append(metadata)
         now = datetime.now(timezone.utc)
         filtered = []
@@ -153,9 +178,7 @@ class Mem0MemoryStore:
                     dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                     if dt.tzinfo is None:
                         dt = dt.replace(tzinfo=timezone.utc)
-                    age_seconds = (now - dt).total_seconds()
-                    if 0 <= age_seconds <= 30 * 24 * 3600:
-                        filtered.append(item)
+                    filtered.append(item)
                 except ValueError:
                     filtered.append(item)
             else:
@@ -303,6 +326,7 @@ class GeminiPineconeMem0MemoryStore(Mem0MemoryStore):
     def __init__(self) -> None:
         if not os.getenv("PINECONE_API_KEY"):
             raise RuntimeError("Gemini mode requires PINECONE_API_KEY")
+        if not (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")): raise RuntimeError("Gemini mode requires GEMINI_API_KEY or GOOGLE_API_KEY")
         self._clients: dict[str, Any] = {}
         self._lock = threading.Lock()
 
@@ -417,17 +441,98 @@ class GroqPineconeMem0MemoryStore(Mem0MemoryStore):
                     },
                     "history_db_path": os.getenv("MEM0_HISTORY_DB", "data/mem0_history.db"),
                     "custom_prompt": (
-                        "You are a highly selective memory extraction system for enterprise support logs. "
-                        "Your objective is to extract ONLY persistent user facts, entity IDs (such as MR Numbers), and explicit preferences. "
-                        "STRICT CONSTRAINTS: "
-                        "1. DO NOT extract greetings, polite remarks, or conversational filler. "
-                        "2. DO NOT extract temporary system error states or automated agent prompts ('Please wait...'). "
-                        "3. Keep extracted facts concise (maximum 10 words). "
+                        "You are a highly selective memory extraction system for enterprise support logs.\n"
+                        "Your objective is to extract ONLY persistent user facts, entity IDs (such as MR Numbers), and explicit preferences.\n"
+                        "STRICT CONSTRAINTS:\n"
+                        "1. DO NOT extract greetings, polite remarks, or conversational filler.\n"
+                        "2. DO NOT extract temporary system error states or automated agent prompts ('Please wait...').\n"
+                        "3. Keep extracted facts concise (maximum 10 words).\n"
+                        "4. If no permanent user entity or intent exists, return an empty set."
+                    ),
+                    "custom_fact_extraction_prompt": (
+                        "You are a highly selective memory extraction system for enterprise support logs.\n"
+                        "Your objective is to extract ONLY persistent user facts, entity IDs (such as MR Numbers), and explicit preferences.\n"
+                        "STRICT CONSTRAINTS:\n"
+                        "1. DO NOT extract greetings, polite remarks, or conversational filler.\n"
+                        "2. DO NOT extract temporary system error states or automated agent prompts ('Please wait...').\n"
+                        "3. Keep extracted facts concise (maximum 10 words).\n"
                         "4. If no permanent user entity or intent exists, return an empty set."
                     ),
                 }
                 self._clients[namespace] = Memory.from_config(config)
-        return self._clients[namespace]
+            return self._clients[namespace]
+
+
+class GroqQdrantMem0MemoryStore(Mem0MemoryStore):
+    """Mem0 using Groq's fast LPU inference and Qdrant for local vector storage."""
+
+    def __init__(self) -> None:
+        if not os.getenv("GROQ_API_KEY"):
+            raise RuntimeError("Groq mode requires GROQ_API_KEY")
+        self._clients: dict[str, Any] = {}
+        self._lock = threading.Lock()
+
+    @property
+    def backend(self) -> str:
+        return "mem0-groq-qdrant"
+
+    @property
+    def infer_memories(self) -> bool:
+        return True
+
+    def _client(self, organization_id: str):
+        namespace = _namespace(organization_id)
+        with self._lock:
+            if namespace not in self._clients:
+                from mem0 import Memory
+                dimensions = int(os.getenv("MEM0_LOCAL_EMBEDDING_DIMENSION", "768"))
+                base_path = os.getenv("MEM0_LOCAL_QDRANT_PATH", "data/qdrant")
+                config = {
+                    "llm": {
+                        "provider": "groq",
+                        "config": {
+                            "model": os.getenv("MEM0_GROQ_MODEL", "llama-3.3-70b-versatile"),
+                            "temperature": 0.1,
+                            "max_tokens": 1200,
+                        },
+                    },
+                    "embedder": {
+                        "provider": "ollama",
+                        "config": {
+                            "model": os.getenv("MEM0_LOCAL_EMBEDDING_MODEL", "nomic-embed-text:latest"),
+                            "embedding_dims": dimensions,
+                            "ollama_base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+                        },
+                    },
+                    "vector_store": {
+                        "provider": "qdrant",
+                        "config": {
+                            "collection_name": "mem0",
+                            "embedding_model_dims": dimensions,
+                            "path": os.path.join(base_path, namespace),
+                            "on_disk": True,
+                        },
+                    },
+                    "history_db_path": os.getenv("MEM0_HISTORY_DB", "data/mem0_history.db"),
+                    "custom_prompt": (
+                        "You are a memory extraction system for enterprise contact center logs.\n"
+                        "Your objective is to extract durable user facts, entity IDs (such as MR Numbers), patient names, doctor choices, appointment tokens, internet plans, and explicit preferences.\n"
+                        "STRICT CONSTRAINTS:\n"
+                        "1. DO NOT extract greetings, polite remarks, or conversational filler.\n"
+                        "2. DO extract patient names, MR numbers, doctor preferences, appointment dates/tokens, package names, and persistent issues.\n"
+                        "3. Keep extracted facts concise (maximum 15 words)."
+                    ),
+                    "custom_fact_extraction_prompt": (
+                        "You are a memory extraction system for enterprise contact center logs.\n"
+                        "Your objective is to extract durable user facts, entity IDs (such as MR Numbers), patient names, doctor choices, appointment tokens, internet plans, and explicit preferences.\n"
+                        "STRICT CONSTRAINTS:\n"
+                        "1. DO NOT extract greetings, polite remarks, or conversational filler.\n"
+                        "2. DO extract patient names, MR numbers, doctor preferences, appointment dates/tokens, package names, and persistent issues.\n"
+                        "3. Keep extracted facts concise (maximum 15 words)."
+                    ),
+                }
+                self._clients[namespace] = Memory.from_config(config)
+            return self._clients[namespace]
 
 
 def create_memory_store():
@@ -446,6 +551,8 @@ def create_memory_store():
         return GeminiPineconeMem0MemoryStore()
     if backend == "mem0-groq":
         return GroqPineconeMem0MemoryStore()
+    if backend == "mem0-groq-local":
+        return GroqQdrantMem0MemoryStore()
     from pinecone_memory import MemoryStore
 
     return MemoryStore()
