@@ -229,15 +229,27 @@ docker run --rm -p 8765:8765 --env-file .env quicktalk-memory
 ## Architecture
 
 ```mermaid
-flowchart LR
-  C[Customer conversation] --> F[Flask API]
-  F --> M{Memory backend}
-  M -->|Direct| N[Organization namespace]
-  M -->|Mem0 OSS| X[Extraction and memory lifecycle]
-  X --> N
-  N --> P[(Pinecone)]
-  F --> H[3-bullet handoff card]
-  H --> I[Human Agent Inbox]
+flowchart TD
+  subgraph Ingestion
+    C[Customer Chat] -->|POST /api/memories| F[Flask API]
+  end
+
+  subgraph Storage
+    F -->|Raw Event Logging| S[(SQLite: analytics.db)]
+    F -->|Semantic Vector| P[(Pinecone Vector Store)]
+  end
+
+  subgraph Processing
+    S -->|Background Grouping| SS[Session Summaries]
+    SS -->|infer=True| M[Mem0 / LLM Extraction]
+    M -->|Extracts Durable Facts| S
+  end
+
+  subgraph Presentation
+    S -->|Aggregated Data| D[Analytics Dashboard & Custom Inbox]
+    S -->|Strict Profile Context| H[3-Bullet Agent Handoff Card]
+    P -->|Semantic Search| H
+  end
 ```
 
 For production, replace the deterministic demo embedding function with the
