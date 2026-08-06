@@ -252,6 +252,63 @@ flowchart TD
   end
 ```
 
+### Detailed Sequence Diagram
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Customer
+    participant API as Flask API
+    participant SQL as SQLite Analytics (memory_events)
+    participant Pinecone as Pinecone Vector Store
+    participant Profile as SQL Profiles (customer_profiles)
+    participant LLM as Groq/Gemini/Ollama
+    
+    %% PHASE 1: REAL-TIME INGESTION
+    rect rgb(235, 243, 250)
+    Note over Customer, Pinecone: Phase 1: Real-Time Chat (Latency < 20ms)
+    Customer->>API: Sends chat message
+    API->>API: Validate & Normalize Mobile No.
+    API->>Pinecone: Embed text & Upsert (infer=False)
+    Pinecone-->>API: Returns Vector ID
+    API->>SQL: Extract Sentiment/Category via Heuristics
+    API->>SQL: INSERT INTO memory_events
+    end
+
+    %% PHASE 2: ASYNC SUMMARIZATION
+    rect rgb(250, 245, 235)
+    Note over API, LLM: Phase 2: Session End / Agent Opens Chat
+    API->>SQL: Fetch all messages for session
+    SQL-->>API: Returns Raw Transcript
+    API->>LLM: Send transcript for summarization
+    Note right of LLM: Prompt enforces strict format: "Issue | Action | Outcome"
+    LLM-->>API: Returns condensed 3-part summary
+    API->>SQL: INSERT INTO session_summaries
+    API->>Profile: Update customer_profiles (status, current_issue)
+    end
+
+    %% PHASE 3: DURABLE FACT EXTRACTION
+    rect rgb(235, 250, 238)
+    Note over API, LLM: Phase 3: Long-Term Memory (Durable Facts)
+    API->>API: Backfill Script triggers POST /api/memories (infer=True)
+    API->>LLM: Pass summary to Mem0 extraction prompt
+    LLM-->>API: Returns extracted explicit facts
+    API->>Pinecone: Embed facts & Upsert to Vector Store
+    API->>API: Regex heuristic parses facts into Entity Keys/Values
+    API->>SQL: UPSERT INTO durable_facts (Structured Columns)
+    end
+    
+    %% PHASE 4: AGENT DASHBOARD
+    rect rgb(245, 235, 250)
+    Note over Customer, API: Phase 4: Handoff to Human Agent
+    actor Agent
+    Agent->>API: Opens Custom Inbox / Dashboard
+    API->>Profile: SELECT current_issue, previous_action
+    API->>Pinecone: Semantic search for similar past issues
+    API-->>Agent: Displays 3-Bullet Handoff Context Card
+    end
+```
+
 For production, replace the deterministic demo embedding function with the
 organization's approved embedding model and create the Pinecone index using
 that model's vector dimension.
