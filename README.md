@@ -69,7 +69,15 @@ The memory pipeline has been refactored into a decoupled architecture to prevent
 2. **`core/summarizer.py`**: Uses a Chain-of-Thought JSON prompt with Groq (`llama-3.1-8b-instant`) to extract precise 15-word `issue`, `action`, and `outcome` fields.
 3. **`mem0_memory.py` / `core/memory_engine.py`**: Configured with a `STRICT_MEMORY_EXTRACTION_PROMPT` and `limit=3` on retrieval to enforce signal-to-noise ratio before hitting Pinecone.
 
-The Flask API endpoints (`/api/profiles`, `/api/inbox/context-card`, and `/api/inbox/welcome`) also securely enforce mobile normalization and draw directly from the structured `analytics` pipeline rather than raw vector search.
+The Flask API endpoints (`/api/profiles`, `/api/inbox/context-card`, and `/api/inbox/welcome`) securely enforce mobile normalization and draw directly from the structured `analytics` pipeline rather than raw vector search.
+
+### Recent Structural Fixes
+To resolve context isolation and memory leakage, the following core orchestrations were recently patched:
+- **Strict Mobile Normalization**: Enforced `normalize_mobile()` globally within `analytics.get_profile()` to stop format mismatches from silently returning empty profiles.
+- **Routing Priority**: `get_contextual_welcome` now prioritizes the strictly computed analytics profile over raw Mem0 data, preventing generic greetings from masking actual customer issues.
+- **Handoff Noise Filtering**: Deduplicates and scrubs (`is_greeting`) raw `mem0_facts` before rendering them in the agent handoff context card.
+- **Targeted Mem0 Lifecycle**: Memory extraction (`infer=True`) is correctly tagged with `metadata={"memory_type": "session_summary"}` and checked prior to push, avoiding redundant syncs on live-chat metadata.
+- **Asynchronous Processing**: Shifted the Mem0 escalation push to a background thread to unblock the `GET /api/inbox/context-card` request path.
 
 ## Fully free mode
 

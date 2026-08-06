@@ -168,14 +168,22 @@ def create_app(store: MemoryStore | None = None, analytics_repository=None) -> F
         if not organization_id or not mobile_no:
             raise BadRequest("organization_id and mobile_no are required")
         mobile_no = normalize_mobile(mobile_no)
-        profile = analytics.get_profile(organization_id, mobile_no)
-        return jsonify({
-            "bullets": [
-                f"Current/last concern: {profile['current_issue']}",
-                f"Outcome and sentiment: {profile['previous_action']}",
-                f"Relationship context: {profile['previous_session_count']} prior session(s); next step: {profile.get('recommended_next_action', 'None')}",
-            ]
-        })
+        try:
+            return jsonify(tools.invoke("get_handoff_context", {
+                "organization_id": organization_id,
+                "mobile_no": mobile_no
+            }))
+        except Exception as e:
+            # Fallback for tests if registry fails due to whatever reason, though it shouldn't
+            profile = analytics.get_profile(organization_id, mobile_no)
+            return jsonify({
+                "history_summary": [
+                    f"Current/last concern: {profile['current_issue']}",
+                    f"Outcome and sentiment: {profile['previous_action']}",
+                    f"Relationship context: {profile['previous_session_count']} prior session(s); next step: {profile.get('recommended_next_action', 'None')}",
+                ],
+                "memory_count": profile.get("memory_count", 0)
+            })
 
     @app.get("/api/inbox/welcome")
     def inbox_welcome():
