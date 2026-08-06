@@ -15,8 +15,8 @@ from typing import Any
 
 
 DATA_FILE = Path(__file__).parent / "data" / "pinecone_fallback.json"
-INDEX_NAME = os.getenv("PINECONE_INDEX", "quicktalk-memories")
-DIMENSION = int(os.getenv("PINECONE_DIMENSION", "384"))
+INDEX_NAME = os.getenv("PINECONE_INDEX", os.getenv("MEM0_PINECONE_INDEX", "quicktalk-mem0-free"))
+DIMENSION = int(os.getenv("PINECONE_DIMENSION", "768"))
 
 
 def utc_now() -> str:
@@ -84,7 +84,7 @@ class MemoryStore:
 
     def add(self, *, organization_id: str, session_id: str, mobile_no: str,
             text: str, role: str = "customer", timestamp: str | None = None,
-            infer: bool | None = None) -> dict[str, Any]:
+            infer: bool | None = None, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
         if not session_id.strip() or not text.strip():
             raise ValueError("session_id and text are required")
         mobile = normalize_mobile(mobile_no)
@@ -97,13 +97,23 @@ class MemoryStore:
             "role": validate_role(role),
             "text": text.strip(),
         }
+        if metadata:
+            _allowed = {"memory_type", "category", "sentiment", "resolution_status"}
+            record.update({k: v for k, v in metadata.items() if k in _allowed})
         namespace = _namespace(organization_id)
         vector = _embedding(record["text"])
         if self._index:
-            self._index.upsert(
-                vectors=[{"id": record["id"], "values": vector, "metadata": record}],
-                namespace=namespace,
-            )
+            try:
+                self._index.upsert(
+                    vectors=[{"id": record["id"], "values": vector, "metadata": record}],
+                    namespace=namespace,
+                )
+            except Exception as exc:
+                print(f"Warning: Pinecone upsert failed ({exc}), storing in local fallback")
+                with self._local_lock:
+                    rows = self._read_local()
+                    rows.append({**record, "namespace": namespace, "values": vector})
+                    self._write_local(rows)
         else:
             with self._local_lock:
                 rows = self._read_local()

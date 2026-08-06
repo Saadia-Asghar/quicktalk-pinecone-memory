@@ -2,8 +2,11 @@
 
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from typing import Any
+import threading
+import re
 
 from memory_summarizer import contextual_welcome
+from analytics import is_greeting
 
 
 TOOL_DEFINITIONS = [
@@ -99,6 +102,7 @@ class ToolRegistry:
                 text=arguments["text"],
                 role=arguments.get("role", "customer"),
                 timestamp=arguments.get("timestamp"),
+                infer=False,
             )
             if self.analytics:
                 self.analytics.record_memory(record)
@@ -128,53 +132,79 @@ class ToolRegistry:
                     latest_summary = latest_sess["summary"]
                     
                     try:
-                        existing = self.store.search(
-                            organization_id=org_id,
-                            mobile_no=mobile,
-                            session_id=latest_session_id,
-                            limit=1
+                        existing = self.store.recent(organization_id=org_id, mobile_no=mobile)
+                        already_summarized = any(
+                            item.get("session_id") == latest_session_id and
+                            (item.get("metadata", {}).get("memory_type") == "session_summary" or item.get("memory_type") == "session_summary")
+                            for item in (existing if isinstance(existing, list) else existing.get("results", []))
                         )
-                        if not existing:
-                            print(f"Session {latest_session_id} escalated. Pushing summary to Mem0...")
-                            self.store.add(
-                                organization_id=org_id,
-                                session_id=latest_session_id,
-                                mobile_no=mobile,
-                                text=latest_summary,
-                                role="customer",
-                                infer=True
-                            )
+                        if not already_summarized:
+                            print(f"Session {latest_session_id} escalated. Pushing summary to Mem0 async...")
+                            
+                            def _push():
+                                try:
+                                    self.store.add(
+                                        organization_id=org_id,
+                                        session_id=latest_session_id,
+                                        mobile_no=mobile,
+                                        text=latest_summary,
+                                        role="system",
+                                        infer=True,
+                                        metadata={"memory_type": "session_summary"}
+                                    )
+                                except Exception as exc:
+                                    print(f"Warning: async Mem0 push failed for {latest_session_id}: {exc}")
+                                    
+                            threading.Thread(target=_push, daemon=True).start()
                     except Exception as e:
                         print(f"Warning: Failed to verify/push session summary to Mem0: {e}")
                 
                 status = "Resolved" if profile["status"] == "resolved" else "Unresolved"
                 
-                # Fetch Mem0 memories with a strict 1.5-second timeout
+                latest_issue = profile['current_issue'][:180]
+                previous_session_str = f"Status: {status}; previous action: {profile['previous_action'][:145]}"
+                
+                session_summaries = profile.get("session_summaries", [])
+                if len(session_summaries) > 1:
+                    prev_sess = session_summaries[1]
+                    date_str = prev_sess.get("started_at", "")[:10]
+                    prev_summary = prev_sess.get("summary", "")
+                    issue_match = re.search(r"issue:\s*(.*?)(?:\s+action:|\s*$)", prev_summary, re.I | re.DOTALL)
+                    prev_issue = issue_match.group(1).strip() if issue_match else prev_summary[:100]
+                    previous_session_str = f"Previous session ({date_str}): {prev_issue}"
+                else:
+                    previous_session_str = "No prior session on record."
+
+                history_bullets = [
+                    f"Latest issue: {latest_issue}",
+                    previous_session_str,
+                    f"Recommended next action: {profile['recommended_next_action'][:180]}",
+                ]
+                
+                # Fetch Mem0 memories with a strict 1.5-second timeout and filter noise
                 mem0_facts = []
                 try:
                     with ThreadPoolExecutor(max_workers=1) as executor:
-                        future = executor.submit(
-                            self.store.recent,
-                            organization_id=org_id,
-                            mobile_no=mobile
-                        )
-                        memories = future.result(timeout=1.5)
-                        mem0_facts = [m["text"] for m in memories if m.get("role") != "assistant"]
+                        future = executor.submit(self.store.recent, organization_id=org_id, mobile_no=mobile)
+                        memories = future.result(timeout=6.0)
+                    seen = set()
+                    for m in memories:
+                        text = str(m.get("text") or m.get("memory") or "").strip()
+                        if not text or is_greeting(text) or text in seen:
+                            continue
+                        seen.add(text)
+                        mem0_facts.append(text)
                 except TimeoutError:
-                    print("Warning: Mem0 vector search timed out. Bypassing to keep response fast.")
+                    print("Warning: Mem0 vector search timed out after 6.0s.")
                 except Exception as e:
                     print(f"Warning: Failed to fetch Mem0 memories: {e}")
                 
                 return {
                     "organization_id": arguments["organization_id"],
                     "mobile_no": arguments["mobile_no"],
-                    "history_summary": [
-                        f"Current issue: {profile['current_issue'][:180]}",
-                        f"Status: {status}; previous action: {profile['previous_action'][:145]}",
-                        f"Recommended next action: {profile['recommended_next_action'][:180]}",
-                    ],
+                    "history_summary": history_bullets,
                     "memory_count": profile["memory_count"],
-                    "memories": [],
+                    "memories": mem0_facts,
                     "mem0_facts": mem0_facts,
                     "profile_summary": profile["profile_summary"],
                     "current_issue": profile["current_issue"],
@@ -212,50 +242,35 @@ class ToolRegistry:
             }
         if name == "get_contextual_welcome":
             self._require(arguments, "organization_id", "mobile_no")
+            org_id = arguments["organization_id"]
+            mobile = arguments["mobile_no"]
+            if self.analytics:
+                profile = self.analytics.get_profile(org_id, mobile, session_limit=1)
+                if profile.get("memory_count"):
+                    short = profile["current_issue"].strip().rstrip(".!?")[:100]
+                    return {
+                        "organization_id": org_id, "mobile_no": mobile,
+                        "welcome_message": f'Hello! I see your last query was regarding "{short}". '
+                                            "Has this been resolved, or can I help you further today?",
+                        "memory_count": profile["memory_count"], "source": "precomputed-profile",
+                    }
+            # fall back to raw Mem0 traversal only if analytics has nothing
             memories = []
             try:
                 with ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(
-                        self.store.recent,
-                        organization_id=arguments["organization_id"],
-                        mobile_no=arguments["mobile_no"]
-                    )
+                    future = executor.submit(self.store.recent, organization_id=org_id, mobile_no=mobile)
                     memories = future.result(timeout=1.5)
             except Exception as e:
                 print(f"Warning: Mem0 welcome query failed or timed out: {e}")
-
             if memories:
-                welcome = contextual_welcome(memories)
                 return {
-                    "organization_id": arguments["organization_id"],
-                    "mobile_no": arguments["mobile_no"],
-                    "welcome_message": welcome,
-                    "memory_count": len(memories),
-                    "source": "mem0-vector-store",
+                    "organization_id": org_id, "mobile_no": mobile,
+                    "welcome_message": contextual_welcome(memories),
+                    "memory_count": len(memories), "source": "mem0-vector-store",
                 }
-            if self.analytics:
-                profile = self.analytics.get_profile(
-                    arguments["organization_id"], arguments["mobile_no"], session_limit=1
-                )
-                if profile["memory_count"]:
-                    short = profile["current_issue"].strip().rstrip(".!?")[:100]
-                    return {
-                        "organization_id": arguments["organization_id"],
-                        "mobile_no": arguments["mobile_no"],
-                        "welcome_message": (
-                            f"Hello! I see your last query was regarding \"{short}\". "
-                            "Has this been resolved, or can I help you further today?"
-                        ),
-                        "memory_count": profile["memory_count"],
-                        "source": "precomputed-profile",
-                    }
-            return {
-                "organization_id": arguments["organization_id"],
-                "mobile_no": arguments["mobile_no"],
-                "welcome_message": "Hello! How can I help you today?",
-                "memory_count": 0,
-                "source": "default",
-            }
+            return {"organization_id": org_id, "mobile_no": mobile,
+                    "welcome_message": "Hello! How can I help you today?",
+                    "memory_count": 0, "source": "default"}
         raise KeyError(name)
 
     @staticmethod

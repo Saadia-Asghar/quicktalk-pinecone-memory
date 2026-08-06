@@ -5,3 +5,6 @@ mem0ai>=0.1.118,<1.0
 ollama>=0.5,<1.0
 python-dotenv==1.0.1
 redis>=5.0,<7.0
+groq>=0.11,<1.0
+pinecone-text>=0.9,<1.0
+qdrant-client>=1.7,<2.0

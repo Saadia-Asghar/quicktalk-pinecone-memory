@@ -9,8 +9,9 @@ exactly three-bullet handoff summary before the agent replies.
 
 - Organization isolation through one Pinecone namespace per organization
 - Customer isolation through normalized mobile-number metadata filters
+- Decoupled `core/` pipeline: Sanitizer -> CoT Summarizer -> Mem0 Engine
 - Session-aware memory storage and semantic retrieval
-- Three-bullet Agent Handoff Context Card
+- Three-bullet Agent Handoff Context Card backed by structured facts
 - Local JSON fallback for development without Pinecone credentials
 - Optional Mem0 OSS extraction and lifecycle infrastructure on Pinecone
 - Responsive Human Agent Inbox demo
@@ -61,6 +62,24 @@ The Mem0 adapter creates a separate Pinecone namespace for every organization
 and hashes `organization_id + mobile_no` into its `user_id`. Session, mobile,
 role, and timestamp remain attached as metadata. Keep `MEMORY_BACKEND=pinecone`
 for the deterministic direct-Pinecone/local mode.
+
+### Production Pipeline Refactor
+The memory pipeline has been refactored into a decoupled architecture to prevent Mem0 hallucination and context bloat:
+1. **`core/sanitizer.py`**: Scrubs bot greetings and technical system errors from raw transcripts.
+2. **`core/summarizer.py`**: Uses a Chain-of-Thought JSON prompt with Groq (`llama-3.1-8b-instant`) to extract precise 15-word `issue`, `action`, and `outcome` fields.
+3. **`mem0_memory.py` / `core/memory_engine.py`**: Configured with a `STRICT_MEMORY_EXTRACTION_PROMPT` and `limit=3` on retrieval to enforce signal-to-noise ratio before hitting Pinecone.
+
+The Flask API endpoints (`/api/profiles`, `/api/inbox/context-card`, and `/api/inbox/welcome`) securely enforce mobile normalization and draw directly from the structured `analytics` pipeline rather than raw vector search.
+
+### Recent Structural Fixes
+To resolve context isolation and memory leakage, the following core orchestrations were recently patched:
+- **Strict Mobile Normalization**: Enforced `normalize_mobile()` globally within `analytics.get_profile()` to stop format mismatches from silently returning empty profiles.
+- **Routing Priority**: `get_contextual_welcome` now prioritizes the strictly computed analytics profile over raw Mem0 data, preventing generic greetings from masking actual customer issues.
+- **Handoff Noise Filtering**: Deduplicates and scrubs (`is_greeting`) raw `mem0_facts` before rendering them in the agent handoff context card.
+- **Targeted Mem0 Lifecycle**: Memory extraction (`infer=True`) is correctly tagged with `metadata={"memory_type": "session_summary"}` and checked prior to push, avoiding redundant syncs on live-chat metadata. Individual message inserts via `save_customer_memory` now default to `infer=False` to prevent noisy, fragmented memories and LLM rate-limit exhaustion.
+- **Asynchronous Processing**: Shifted the Mem0 escalation push to a background thread to unblock the `GET /api/inbox/context-card` request path.
+- **Qdrant Vector Storage**: Migrated off Pinecone to a purely local Qdrant vector store (`mem0-groq-local`) to bypass cloud credential issues while still utilizing Groq's high-speed inference for summary generation.
+- **System Role Enforcement**: LLM-generated session summaries are now pushed to Mem0 under the `role="system"` (instead of `customer`) so Mem0 correctly extracts durable facts without confusing them for raw conversational filler.
 
 ## Fully free mode
 

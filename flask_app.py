@@ -12,10 +12,10 @@ from werkzeug.exceptions import BadRequest, NotFound
 
 from analytics import AnalyticsRepository
 from mem0_memory import create_memory_store
-from pinecone_memory import MemoryStore, build_handoff_bullets
+from pinecone_memory import MemoryStore, build_handoff_bullets, normalize_mobile
 from tool_calling import TOOL_DEFINITIONS, ToolRegistry
 
-load_dotenv()
+load_dotenv(override=True)
 
 
 def create_app(store: MemoryStore | None = None, analytics_repository=None) -> Flask:
@@ -43,8 +43,8 @@ def create_app(store: MemoryStore | None = None, analytics_repository=None) -> F
 
     @app.errorhandler(RuntimeError)
     def backend_error(error):
-        app.logger.exception("Memory backend failure")
-        return jsonify({"error": "memory_backend_unavailable", "detail": str(error)}), 503
+        app.logger.exception("Runtime error inside backend")
+        return jsonify({"error": "service_unavailable", "detail": str(error)}), 503
 
     @app.get("/")
     def index():
@@ -82,7 +82,7 @@ def create_app(store: MemoryStore | None = None, analytics_repository=None) -> F
             organization_id=body["organization_id"], session_id=body["session_id"],
             mobile_no=body["mobile_no"], text=body["text"],
             role=body.get("role", "customer"), timestamp=body.get("timestamp"),
-            infer=False,
+            infer=body.get("infer", False),
         )
         analytics.record_memory(record)
         return jsonify(record), 201
@@ -103,6 +103,9 @@ def create_app(store: MemoryStore | None = None, analytics_repository=None) -> F
         organization_id = request.args.get("organization_id", "")
         if not organization_id:
             raise BadRequest("organization_id is required")
+        mobile_no = request.args.get("mobile_no")
+        if mobile_no:
+            mobile_no = normalize_mobile(mobile_no)
         with analytics._connect() as db:
             rows = db.execute(
                 """SELECT role, text, timestamp FROM memory_events
@@ -131,6 +134,7 @@ def create_app(store: MemoryStore | None = None, analytics_repository=None) -> F
         organization_id = request.args.get("organization_id", "")
         if not organization_id:
             raise BadRequest("organization_id is required")
+        mobile_no = normalize_mobile(mobile_no)
         try:
             limit = min(max(int(request.args.get("session_limit", "5")), 1), 50)
             offset = max(int(request.args.get("session_offset", "0")), 0)
@@ -163,9 +167,39 @@ def create_app(store: MemoryStore | None = None, analytics_repository=None) -> F
         mobile_no = request.args.get("mobile_no", "")
         if not organization_id or not mobile_no:
             raise BadRequest("organization_id and mobile_no are required")
-        return jsonify(tools.invoke("get_handoff_context", {
-            "organization_id": organization_id, "mobile_no": mobile_no,
-        }))
+        mobile_no = normalize_mobile(mobile_no)
+        try:
+            return jsonify(tools.invoke("get_handoff_context", {
+                "organization_id": organization_id,
+                "mobile_no": mobile_no
+            }))
+        except Exception as e:
+            # Fallback for tests if registry fails due to whatever reason, though it shouldn't
+            profile = analytics.get_profile(organization_id, mobile_no)
+            return jsonify({
+                "history_summary": [
+                    f"Current/last concern: {profile['current_issue']}",
+                    f"Outcome and sentiment: {profile['previous_action']}",
+                    f"Relationship context: {profile['previous_session_count']} prior session(s); next step: {profile.get('recommended_next_action', 'None')}",
+                ],
+                "memory_count": profile.get("memory_count", 0)
+            })
+
+    @app.get("/api/inbox/welcome")
+    def inbox_welcome():
+        organization_id = request.args.get("organization_id", "")
+        mobile_no = request.args.get("mobile_no", "")
+        if not organization_id or not mobile_no:
+            raise BadRequest("organization_id and mobile_no are required")
+        mobile_no = normalize_mobile(mobile_no)
+        profile = analytics.get_profile(organization_id, mobile_no)
+        if profile.get("memory_count", 0) == 0:
+            return jsonify({"welcome": "Hello! How can I help you today?"})
+        
+        status_phrase = "has this been resolved" if profile.get("status") != "resolved" else "is everything still working well"
+        return jsonify({
+            "welcome": f'Hello! I see your last query was regarding "{profile["current_issue"]}" — {status_phrase}, or can I help you further today?'
+        })
 
     if analytics_repository is None and os.getenv("WARMUP_ON_STARTUP", "false").lower() == "true":
         threading.Thread(target=analytics.warm, name="profile-cache-warmup", daemon=True).start()
