@@ -9,8 +9,9 @@ exactly three-bullet handoff summary before the agent replies.
 
 - Organization isolation through one Pinecone namespace per organization
 - Customer isolation through normalized mobile-number metadata filters
+- Decoupled `core/` pipeline: Sanitizer -> CoT Summarizer -> Mem0 Engine
 - Session-aware memory storage and semantic retrieval
-- Three-bullet Agent Handoff Context Card
+- Three-bullet Agent Handoff Context Card backed by structured facts
 - Local JSON fallback for development without Pinecone credentials
 - Optional Mem0 OSS extraction and lifecycle infrastructure on Pinecone
 - Responsive Human Agent Inbox demo
@@ -61,6 +62,14 @@ The Mem0 adapter creates a separate Pinecone namespace for every organization
 and hashes `organization_id + mobile_no` into its `user_id`. Session, mobile,
 role, and timestamp remain attached as metadata. Keep `MEMORY_BACKEND=pinecone`
 for the deterministic direct-Pinecone/local mode.
+
+### Production Pipeline Refactor
+The memory pipeline has been refactored into a decoupled architecture to prevent Mem0 hallucination and context bloat:
+1. **`core/sanitizer.py`**: Scrubs bot greetings and technical system errors from raw transcripts.
+2. **`core/summarizer.py`**: Uses a Chain-of-Thought JSON prompt with Groq (`llama-3.1-8b-instant`) to extract precise 15-word `issue`, `action`, and `outcome` fields.
+3. **`mem0_memory.py` / `core/memory_engine.py`**: Configured with a `STRICT_MEMORY_EXTRACTION_PROMPT` and `limit=3` on retrieval to enforce signal-to-noise ratio before hitting Pinecone.
+
+The Flask API endpoints (`/api/profiles`, `/api/inbox/context-card`, and `/api/inbox/welcome`) also securely enforce mobile normalization and draw directly from the structured `analytics` pipeline rather than raw vector search.
 
 ## Fully free mode
 

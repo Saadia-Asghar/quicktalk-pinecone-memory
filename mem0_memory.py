@@ -71,9 +71,14 @@ class Mem0MemoryStore:
                         },
                     },
                     "history_db_path": os.getenv("MEM0_HISTORY_DB", "data/mem0_history.db"),
-                    "custom_instructions": (
-                        "Extract durable contact-center facts, customer preferences, active issues, "
-                        "resolutions, and sentiment. Never merge identities or organizations."
+                    "custom_prompt": (
+                        "You are a highly selective memory extraction system for enterprise support logs. "
+                        "Your objective is to extract ONLY persistent user facts, entity IDs (such as MR Numbers), and explicit preferences. "
+                        "STRICT CONSTRAINTS: "
+                        "1. DO NOT extract greetings, polite remarks, or conversational filler. "
+                        "2. DO NOT extract temporary system error states or automated agent prompts ('Please wait...'). "
+                        "3. Keep extracted facts concise (maximum 10 words). "
+                        "4. If no permanent user entity or intent exists, return an empty set."
                     ),
                 }
                 self._clients[namespace] = Memory.from_config(config)
@@ -115,7 +120,7 @@ class Mem0MemoryStore:
             query,
             user_id=customer_id,
             filters=filters or None,
-            limit=min(limit, 50),
+            limit=min(limit, 3),  # Hard-capped to 3 to prevent memory noise
         )
         results = response.get("results", []) if isinstance(response, dict) else response
         normalized = []
