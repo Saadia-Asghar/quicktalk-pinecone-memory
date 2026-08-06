@@ -119,6 +119,7 @@ class MemoryStore:
                 rows = self._read_local()
                 rows.append({**record, "namespace": namespace, "values": vector})
                 self._write_local(rows)
+        record["extracted_facts"] = [{"text": record["text"]}]
         return {k: v for k, v in record.items() if k != "organization_id"} | {"organization_id": record["organization_id"]}
 
     def search(self, *, organization_id: str, mobile_no: str, query: str = "conversation history",

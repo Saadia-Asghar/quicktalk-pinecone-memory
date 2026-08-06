@@ -85,6 +85,46 @@ def create_app(store: MemoryStore | None = None, analytics_repository=None) -> F
             infer=body.get("infer", False),
         )
         analytics.record_memory(record)
+
+        if body.get("infer", False) and record.get("extracted_facts"):
+            import re
+            for fact_dict in record["extracted_facts"]:
+                fact_text = fact_dict.get("memory") or fact_dict.get("text")
+                if not fact_text: continue
+                
+                entity_key, entity_value = None, None
+                lower_text = fact_text.lower()
+                
+                if "internet plan" in lower_text or "package" in lower_text or "mbps" in lower_text:
+                    entity_key = "internet_package"
+                    match = re.search(r"(\d+\s*mbps|home unlimited \d+[a-z]*)", lower_text)
+                    if match: entity_value = match.group(1)
+                elif "dr." in lower_text or "doctor" in lower_text:
+                    entity_key = "preferred_doctor"
+                    match = re.search(r"(dr\.?\s+[a-z\s]+)(?:$|\s|[,.])", lower_text)
+                    if match: entity_value = match.group(1).strip()
+                elif "mr number" in lower_text or "mr#" in lower_text:
+                    entity_key = "mr_number"
+                    match = re.search(r"(?:\bmr\s*number|\bmr#)\s*:?\s*(\d+)", lower_text)
+                    if match: entity_value = match.group(1)
+                elif "ntl" in lower_text:
+                    entity_key = "ntl_id"
+                    match = re.search(r"(ntl-\d+)", lower_text)
+                    if match: entity_value = match.group(1).upper()
+                
+                analytics.record_durable_fact(
+                    organization_scope=body["organization_id"],
+                    mobile_no=body["mobile_no"],
+                    session_id=body["session_id"],
+                    fact_text=fact_text,
+                    entity_key=entity_key,
+                    entity_value=entity_value,
+                    memory_type=body.get("memory_type", "fact"),
+                    category=body.get("category"),
+                    sentiment=body.get("sentiment"),
+                    resolution_status=body.get("resolution_status")
+                )
+
         return jsonify(record), 201
 
     @app.get("/api/demo-users")

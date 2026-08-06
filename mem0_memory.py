@@ -124,12 +124,14 @@ class Mem0MemoryStore:
         mem0_role = "user" if role == "customer" else "assistant" if role == "assistant" else "system"
         infer_val = infer if infer is not None else self.infer_memories
         try:
-            self._client(organization_id).add(
+            res = self._client(organization_id).add(
                 [{"role": mem0_role, "content": record["text"]}],
                 user_id=self._customer_id(organization_id, mobile),
                 metadata=record,
                 infer=infer_val,
             )
+            extracted_facts = _extract_mem0_results(res)
+            record["extracted_facts"] = extracted_facts
         except Exception as e:
             print(f"Warning: Mem0 client add failed: {e}")
         return record

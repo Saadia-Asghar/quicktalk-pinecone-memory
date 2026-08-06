@@ -176,6 +176,22 @@ class AnalyticsRepository:
                     summary TEXT NOT NULL,
                     PRIMARY KEY (organization_scope, mobile_no, session_id)
                 );
+                CREATE TABLE IF NOT EXISTS durable_facts (
+                    memory_id TEXT PRIMARY KEY,
+                    organization_scope TEXT NOT NULL,
+                    mobile_no TEXT NOT NULL,
+                    session_id TEXT,
+                    fact_text TEXT NOT NULL,
+                    entity_key TEXT,
+                    entity_value TEXT,
+                    memory_type TEXT NOT NULL,
+                    category TEXT,
+                    sentiment TEXT,
+                    resolution_status TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (organization_scope) REFERENCES organizations(organization_scope)
+                );
                 CREATE INDEX IF NOT EXISTS idx_events_org_time
                     ON memory_events(organization_scope, timestamp);
                 CREATE INDEX IF NOT EXISTS idx_events_org_session
@@ -190,6 +206,10 @@ class AnalyticsRepository:
                     ON session_summaries(organization_scope, mobile_no, ended_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_sessions_org_status_time
                     ON session_summaries(organization_scope, resolution_status, ended_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_durable_facts_lookup
+                    ON durable_facts(organization_scope, mobile_no);
+                CREATE INDEX IF NOT EXISTS idx_durable_facts_entity
+                    ON durable_facts(entity_key, entity_value);
                 """
             )
 
@@ -208,6 +228,34 @@ class AnalyticsRepository:
                 organization_name=excluded.organization_name, industry=excluded.industry""",
                 (scope, tenant_id, organization_id, organization_name, normalized),
             )
+
+    def record_durable_fact(
+        self, *, organization_scope: str, mobile_no: str, session_id: str | None,
+        fact_text: str, entity_key: str | None = None, entity_value: str | None = None,
+        memory_type: str, category: str | None = None, sentiment: str | None = None,
+        resolution_status: str | None = None
+    ) -> str:
+        import uuid
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as db:
+            existing = db.execute(
+                "SELECT memory_id FROM durable_facts WHERE organization_scope=? AND mobile_no=? AND session_id=? AND entity_key IS ?",
+                (organization_scope, mobile_no, session_id, entity_key),
+            ).fetchone()
+
+            if existing:
+                db.execute(
+                    "UPDATE durable_facts SET fact_text=?, entity_value=?, sentiment=?, resolution_status=?, updated_at=? WHERE memory_id=?",
+                    (fact_text, entity_value, sentiment, resolution_status, now, existing[0]),
+                )
+                return existing[0]
+
+            memory_id = str(uuid.uuid4())
+            db.execute(
+                "INSERT INTO durable_facts (memory_id, organization_scope, mobile_no, session_id, fact_text, entity_key, entity_value, memory_type, category, sentiment, resolution_status, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (memory_id, organization_scope, mobile_no, session_id, fact_text, entity_key, entity_value, memory_type, category, sentiment, resolution_status, now, now),
+            )
+            return memory_id
 
     def record_memory(self, record: dict[str, Any]) -> None:
         scope = str(record["organization_id"])
