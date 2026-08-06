@@ -358,10 +358,80 @@ class GeminiPineconeMem0MemoryStore(Mem0MemoryStore):
             return self._clients[namespace]
 
 
+class GroqPineconeMem0MemoryStore(Mem0MemoryStore):
+    """Mem0 using Groq's fast LPU inference for extraction and Ollama for embeddings."""
+
+    def __init__(self) -> None:
+        if not os.getenv("GROQ_API_KEY"):
+            raise RuntimeError("Groq mode requires GROQ_API_KEY")
+        if not os.getenv("PINECONE_API_KEY"):
+            raise RuntimeError("Groq mode requires PINECONE_API_KEY")
+        self._clients: dict[str, Any] = {}
+        self._lock = threading.Lock()
+
+    @property
+    def backend(self) -> str:
+        return "mem0-groq-pinecone"
+
+    @property
+    def infer_memories(self) -> bool:
+        return True
+
+    def _client(self, organization_id: str):
+        namespace = _namespace(organization_id)
+        with self._lock:
+            if namespace not in self._clients:
+                from mem0 import Memory
+                dimensions = int(os.getenv("MEM0_LOCAL_EMBEDDING_DIMENSION", "768"))
+                config = {
+                    "llm": {
+                        "provider": "groq",
+                        "config": {
+                            "model": os.getenv("MEM0_GROQ_MODEL", "llama-3.3-70b-versatile"),
+                            "temperature": 0.1,
+                            "max_tokens": 1200,
+                        },
+                    },
+                    "embedder": {
+                        "provider": "ollama",
+                        "config": {
+                            "model": os.getenv("MEM0_LOCAL_EMBEDDING_MODEL", "nomic-embed-text:latest"),
+                            "embedding_dims": dimensions,
+                            "ollama_base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+                        },
+                    },
+                    "vector_store": {
+                        "provider": "pinecone",
+                        "config": {
+                            "collection_name": os.getenv("MEM0_PINECONE_INDEX", "quicktalk-mem0"),
+                            "embedding_model_dims": dimensions,
+                            "namespace": namespace,
+                            "serverless_config": {
+                                "cloud": os.getenv("PINECONE_CLOUD", "aws"),
+                                "region": os.getenv("PINECONE_REGION", "us-east-1"),
+                            },
+                            "metric": "cosine",
+                        },
+                    },
+                    "history_db_path": os.getenv("MEM0_HISTORY_DB", "data/mem0_history.db"),
+                    "custom_prompt": (
+                        "You are a highly selective memory extraction system for enterprise support logs. "
+                        "Your objective is to extract ONLY persistent user facts, entity IDs (such as MR Numbers), and explicit preferences. "
+                        "STRICT CONSTRAINTS: "
+                        "1. DO NOT extract greetings, polite remarks, or conversational filler. "
+                        "2. DO NOT extract temporary system error states or automated agent prompts ('Please wait...'). "
+                        "3. Keep extracted facts concise (maximum 10 words). "
+                        "4. If no permanent user entity or intent exists, return an empty set."
+                    ),
+                }
+                self._clients[namespace] = Memory.from_config(config)
+        return self._clients[namespace]
+
+
 def create_memory_store():
     """Select the configured infrastructure without importing Mem0 unnecessarily."""
     backend = os.getenv("MEMORY_BACKEND", "pinecone").lower()
-    if backend in ("mem0", "mem0-pinecone-free", "mem0-gemini") and not os.getenv("PINECONE_API_KEY"):
+    if backend in ("mem0", "mem0-pinecone-free", "mem0-gemini", "mem0-groq") and not os.getenv("PINECONE_API_KEY"):
         from pinecone_memory import MemoryStore
         return MemoryStore()
     if backend == "mem0":
@@ -372,6 +442,8 @@ def create_memory_store():
         return FreePineconeMem0MemoryStore()
     if backend == "mem0-gemini":
         return GeminiPineconeMem0MemoryStore()
+    if backend == "mem0-groq":
+        return GroqPineconeMem0MemoryStore()
     from pinecone_memory import MemoryStore
 
     return MemoryStore()
