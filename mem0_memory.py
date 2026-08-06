@@ -86,7 +86,7 @@ class Mem0MemoryStore:
 
     def add(self, *, organization_id: str, session_id: str, mobile_no: str,
             text: str, role: str = "customer", timestamp: str | None = None,
-            infer: bool | None = None) -> dict[str, Any]:
+            infer: bool | None = None, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
         if not organization_id.strip() or not session_id.strip() or not text.strip():
             raise ValueError("organization_id, session_id and text are required")
         mobile = normalize_mobile(mobile_no)
@@ -99,6 +99,8 @@ class Mem0MemoryStore:
             "role": validate_role(role),
             "text": text.strip(),
         }
+        if metadata:
+            record.update(metadata)
         mem0_role = "user" if role == "customer" else "assistant" if role == "assistant" else "system"
         infer_val = infer if infer is not None else self.infer_memories
         self._client(organization_id).add(
