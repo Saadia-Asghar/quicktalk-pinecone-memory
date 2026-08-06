@@ -29,8 +29,6 @@ if _env_path.exists():
                 os.environ.setdefault(_k.strip(), _v.strip())
 
 from analytics import AnalyticsRepository
-from core.sanitizer import clean_transcript_for_memory
-from core.summarizer import generate_session_summary
 
 SCRIPT_DIR = Path(__file__).parent
 
@@ -137,7 +135,7 @@ def extract_events(path: Path, fmt: str) -> list[dict]:
         scope = f"test--{raw_org_id}"
         repo.register_organization(
             scope=scope, tenant_id="test", organization_id=raw_org_id,
-            organization_name=profile.get("name", raw_org_id), industry="telecom",
+            organization_name=profile.get("name", raw_org_id), industry=profile.get("industry", "telecom"),
         )
         for item in data.get("save_payloads", []):
             args = (item.get("payload") or {}).get("arguments") or {}
@@ -172,11 +170,19 @@ def heuristic_summary(events: list[dict]) -> str:
     issue = scored[0][1][:90] if scored else (customer[0]["text"][:90] if customer else "Customer enquiry")
     action = assistant[-1]["text"][:90] if assistant else "Support responded"
     outcome = customer[-1]["text"][:80] if len(customer) > 1 else "Pending"
+    from analytics import is_greeting
+    if is_greeting(outcome): outcome = "Pending response."
     return f"Issue: {issue} Action: {action} Outcome: {outcome}"
 
 
 def groq_summary(events: list[dict]) -> str:
     """Call Groq LLM for a structured CoT summary."""
+    try:
+        from core.sanitizer import clean_transcript_for_memory
+        from core.summarizer import generate_session_summary
+    except ImportError:
+        return heuristic_summary(events)
+        
     transcript_lines = [
         f"{'Customer' if e['role'] != 'assistant' else 'Support'}: {e['text']}"
         for e in sorted(events, key=lambda x: x["timestamp"])
@@ -314,8 +320,8 @@ def main():
                     session_id=session_id,
                     mobile_no=mobile,
                     text=summary,
-                    role="customer",
-                    infer=True,
+                    role="system",
+                    infer=False,
                 )
                 stats["mem0_ok"] += 1
             except Exception as err:
@@ -325,13 +331,15 @@ def main():
     # ── Phase 4: Rebuild all customer profiles ────────────────────────
     print(f"\n[Phase 3/3] Rebuilding customer profiles in SQLite...")
     rebuilt = 0
+    failures = 0
     for cust_key in customer_sessions:
         sc, mob = cust_key.split("__", 1)
         try:
             repo._recompute_profile(sc, mob)
             rebuilt += 1
         except Exception as e:
-            pass  # silently skip
+            print(f"  [WARN] Failed to recompute {sc}/{mob}: {e}")
+            failures += 1
     print(f"  Rebuilt {rebuilt} customer profiles.")
 
     # ── Final Report ─────────────────────────────────────────────────
@@ -343,6 +351,7 @@ def main():
     print(f"  Heuristic summaries   : {stats['heuristic']}")
     print(f"  Mem0 memories pushed  : {stats['mem0_ok']}")
     print(f"  Mem0 failures         : {stats['mem0_fail']}")
+    print(f"  Profile failures      : {failures}")
     print(f"  Errors                : {stats['errors']}")
     print("=" * 65)
     print()

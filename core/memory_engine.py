@@ -24,7 +24,7 @@ def get_production_memory(organization_id: str) -> Memory:
     config = {
         "llm": {
             "provider": "openai",
-            "config": {"model": os.getenv("MEM0_LLM_MODEL", "gpt-4.1-mini")},
+            "config": {"model": os.getenv("MEM0_LLM_MODEL", "gpt-4o-mini")},
         },
         "embedder": {
             "provider": "openai",

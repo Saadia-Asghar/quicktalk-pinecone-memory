@@ -88,7 +88,7 @@ def generate_session_summary(transcript_text: str) -> dict[str, str]:
             "outcome": "No data"
         }
         
-    prompt = PROMPT_TEMPLATE.format(transcript=transcript_text)
+    prompt = PROMPT_TEMPLATE.replace("{transcript}", transcript_text)
     
     # Force Groq API with JSON format
     groq_key = os.getenv("GROQ_API_KEY")

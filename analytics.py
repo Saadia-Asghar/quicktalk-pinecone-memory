@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from pinecone_memory import normalize_mobile
 
 DEFAULT_DB = Path(__file__).parent / "data" / "analytics.db"
 
@@ -269,6 +270,7 @@ class AnalyticsRepository:
         self, organization_scope: str, mobile_no: str, *, session_limit: int = 5,
         session_offset: int = 0,
     ) -> dict[str, Any]:
+        mobile_no = normalize_mobile(mobile_no)
         cached = self.cache.get(organization_scope, mobile_no) if session_offset == 0 else None
         if cached:
             profile = cached
@@ -371,46 +373,58 @@ class AnalyticsRepository:
 
         summaries = []
         for sess_id, session_events in grouped.items():
-            cached_sum, cached_cnt = existing_summaries.get(sess_id, (None, 0))
-            if cached_sum is not None and len(session_events) == cached_cnt:
-                resolved = any(event["resolution_status"] == "resolved" for event in session_events)
-                category = Counter(event["category"] for event in session_events).most_common(1)[0][0]
-                summary_data = {
-                    "organization_scope": scope, "mobile_no": mobile_no,
-                    "session_id": sess_id, "started_at": session_events[0]["timestamp"],
-                    "ended_at": session_events[-1]["timestamp"], "message_count": len(session_events), "category": category,
-                    "resolution_status": "resolved" if resolved else "not_recorded",
-                    "summary": cached_sum,
-                }
-            else:
-                summary_data = self._build_session_summary(scope, mobile_no, session_events)
+            summary_data = self._build_session_summary(scope, mobile_no, session_events)
             summaries.append(summary_data)
             
         summaries.sort(key=lambda item: item["ended_at"], reverse=True)
         active_summaries = [
             summary for summary in summaries if summary["session_id"] in recent_grouped
         ] or summaries
+        _no_recent = not any(s["session_id"] in recent_grouped for s in summaries)
         latest_session_id = active_summaries[0]["session_id"]
         latest_events = grouped[latest_session_id]
-        latest_action = next(
-            (event["text"] for event in reversed(latest_events) if event["role"] == "assistant"),
-            "No previous support action is recorded.",
-        )
         status = active_summaries[0]["resolution_status"]
+        if _no_recent: status = "not_recorded"
         category = active_summaries[0]["category"]
-        next_action = recommended_action(category, status, self._industry(scope))
-        # Use the latest session summary (LLM-generated) as current issue instead of raw heuristic
+        
         latest_summary_text = active_summaries[0].get("summary", "")
+        has_resolved_outcome = False
         if latest_summary_text and "issue:" in latest_summary_text.lower():
-            # Extract Issue: portion from the structured summary
-            issue_match = re.search(r"issue:\s*(.*?)(?:\s+action:|\s*$)", latest_summary_text, re.I | re.DOTALL)
-            current_issue = issue_match.group(1).strip() if issue_match else concise_issue(latest_summary_text, 110)
+            issue_match = re.search(r"issue:\s*(.*?)(?:\s+action:|\s+outcome:|\s*$)", latest_summary_text, re.I | re.DOTALL)
+            action_match = re.search(r"action:\s*(.*?)(?:\s+outcome:|\s*$)", latest_summary_text, re.I | re.DOTALL)
+            outcome_match = re.search(r"outcome:\s*(.*?)$", latest_summary_text, re.I | re.DOTALL)
+
+            iss_str = issue_match.group(1).strip() if issue_match else ""
+            act_str = action_match.group(1).strip() if action_match else ""
+            out_str = outcome_match.group(1).strip() if outcome_match else ""
+
+            if out_str and any(w in out_str.lower() for w in ["booked", "confirmed", "token", "resolved", "paid", "success", "ticket", "ملاقات"]):
+                has_resolved_outcome = True
+                status = "resolved"
+
+            # Format into 3-4 distinct pointers separated by |
+            parts = []
+            if iss_str:
+                parts.append(f"Initial Query: {iss_str.rstrip('.')}")
+            if act_str and act_str != "No support action recorded.":
+                parts.append(f"Support Action: {act_str.rstrip('.')}")
+            if out_str and out_str != "Pending response.":
+                parts.append(f"Resolution / Booking: {out_str.rstrip('.')}")
+            
+            current_issue = " | ".join(parts) if parts else iss_str
+            latest_action = act_str if act_str and act_str != "No support action recorded." else (out_str if out_str else "Assisted customer with query.")
         else:
             current_issue = extract_core_issue(recent_events, self._industry(scope))
+            latest_action = next(
+                (event["text"] for event in reversed(latest_events) if event["role"] == "assistant"),
+                "No previous support action is recorded.",
+            )
+
+        next_action = recommended_action(category, status, self._industry(scope))
         profile_summary = (
-            f"Current issue: {current_issue} Status: "
+            f"Current issue: {current_issue.rstrip('.')}. Status: "
             f"{'Resolved' if status == 'resolved' else 'Unresolved'}. "
-            f"Previous action: {latest_action} Recommended next action: {next_action}"
+            f"Previous action: {latest_action.rstrip('.')}. Recommended next action: {next_action}"
         )
         updated_at = datetime.now(timezone.utc).isoformat()
         with self._connect() as db:
@@ -454,10 +468,19 @@ class AnalyticsRepository:
     def _build_session_summary(
         scope: str, mobile_no: str, events: list[dict[str, Any]]
     ) -> dict[str, Any]:
+        if not events: return {"organization_scope": scope, "mobile_no": mobile_no, "session_id": "unknown", "started_at": "", "ended_at": "", "message_count": 0, "category": "Other", "resolution_status": "not_recorded", "summary": "No events recorded."}
         events = sorted(events, key=lambda item: item["timestamp"])
         customer_events = [event for event in events if event["role"] != "assistant"]
         assistant_events = [event for event in events if event["role"] == "assistant"]
+        
+        # Check for explicit resolution status or transaction confirmation tokens
         resolved = any(event["resolution_status"] == "resolved" for event in events)
+        for event in assistant_events:
+            txt = event["text"]
+            if re.search(r"(\b\d{7,10}\b|ملاقات|بک ہو گئی|appointment.*booked|confirmed|ticket.*generated|payment.*received|bill.*resolved|successful)", txt, re.I):
+                resolved = True
+                break
+
         category = Counter(event["category"] for event in customer_events or events).most_common(1)[0][0]
         
         # 1. Try LLM-based session summary (Groq, Gemini, or Ollama cloud summarizer)
@@ -474,19 +497,15 @@ class AnalyticsRepository:
                     for item in events
                 )
                 prompt = (
-                    "You are a contact center assistant. Summarize this chat session in the exact format below.\n"
-                    "Format: Issue: <what the customer wanted> | Action: <what support did> | Outcome: <final result>\n"
-                    "Rules: Be specific with names, amounts, doctor names if mentioned. Max 30 words total. "
-                    "Only output the formatted line, nothing else.\n\n"
+                    "You are a contact center AI auditor. Analyze the full chat session from start to finish.\n"
+                    "Format exactly as: Issue: <initial request & any shifts/deviations> | Action: <steps taken by support> | Outcome: <final result, include token/ticket#, doctor name, patient name/MR#, date & time if booked/resolved>\n"
+                    "Rules: Be specific with names, reference numbers, doctor names, patient names, dates. Max 75 words. Output only the formatted line. Respond in English only.\n\n"
                     f"Chat Transcript:\n{transcript}\n\nSummary:"
                 )
                 generated = _ollama(prompt)
                 if generated:
                     cleaned = generated.strip().replace('"', '').replace("'", "").replace("\n", " ")
-                    # Accept if it has at least Issue: in it
                     if "issue:" in cleaned.lower():
-                        # Normalize separator: support both | and plain spacing
-                        cleaned = re.sub(r"\s*\|\s*", " ", cleaned)
                         return {
                             "organization_scope": scope, "mobile_no": mobile_no,
                             "session_id": events[0]["session_id"], "started_at": events[0]["timestamp"],
@@ -498,7 +517,6 @@ class AnalyticsRepository:
                 pass
 
         # 2. Smart heuristic fallback — reads full transcript to find best Issue/Action/Outcome
-        # Find most informative customer message (highest score)
         scored = []
         for e in customer_events:
             txt = e["text"].strip()
@@ -511,12 +529,23 @@ class AnalyticsRepository:
         scored.sort(key=lambda x: x[0], reverse=True)
         meaningful = scored[0][1] if scored else ((customer_events or events)[0]["text"])
 
-        issue = concise_issue(meaningful, limit=100)
-        # Last assistant reply as action
-        action = concise_issue(assistant_events[-1]["text"], limit=100) if assistant_events else "No support action recorded."
-        # Last customer reply as outcome (if different from issue)
-        last_customer_txt = customer_events[-1]["text"].strip() if customer_events else ""
-        outcome = concise_issue(last_customer_txt, limit=100) if last_customer_txt and last_customer_txt != meaningful else "Pending response."
+        # Check if customer mentioned multiple doctors/topics across the session
+        cust_texts = [e["text"].strip() for e in customer_events if not is_greeting(e["text"].strip()) and len(e["text"].strip()) > 3]
+        if len(cust_texts) >= 2 and cust_texts[0] != cust_texts[-1]:
+            issue = f"{concise_issue(cust_texts[0], limit=70)}; later requested {concise_issue(cust_texts[-1], limit=70)}"
+        else:
+            issue = concise_issue(meaningful, limit=100)
+
+        # Look for assistant transaction confirmation in assistant messages
+        booking_msg = next((e["text"] for e in reversed(assistant_events) if re.search(r"(\b\d{7,10}\b|ملاقات|بک|appointment|token|ticket|confirmed)", e["text"], re.I)), None)
+        if booking_msg:
+            action = "Processed registration and checked slot availability."
+            outcome = concise_issue(booking_msg, limit=140)
+            resolved = True
+        else:
+            action = concise_issue(assistant_events[-1]["text"], limit=100) if assistant_events else "No support action recorded."
+            last_customer_txt = customer_events[-1]["text"].strip() if customer_events else ""
+            outcome = concise_issue(last_customer_txt, limit=100) if last_customer_txt and last_customer_txt != meaningful else "Pending response."
 
         return {
             "organization_scope": scope, "mobile_no": mobile_no,
@@ -623,6 +652,22 @@ def classify_sentiment(text: str) -> str:
 
 def concise_issue(text: str, limit: int = 110) -> str:
     cleaned = text.strip()
+    # Remove image placeholders
+    cleaned = re.sub(r"\[\[IMAGE\]\]|\[IMAGE:[^\]]*\]", "", cleaned, flags=re.I).strip()
+    # Strip leading gender / status prefix tags if present (e.g. "female ", "male ")
+    cleaned = re.sub(r"^(female|male)\s+", "", cleaned, flags=re.I).strip()
+    # Strip leading greetings or conversational openers
+    cleaned = re.sub(
+        r"^(aoa|salam|slam|asalam|assalam|assalamualaikum|hello|hi|hey|hy|hlo|dear|sir|ji|g|g\s+ha|g\s+han)\b[,\.\s:]*",
+        "",
+        cleaned,
+        flags=re.I,
+    ).strip()
+    if not cleaned:
+        cleaned = text.strip()
+    # Ensure initial capitalization
+    if cleaned:
+        cleaned = cleaned[0].upper() + cleaned[1:]
     if len(cleaned) <= limit:
         return cleaned
     return cleaned[:limit].rsplit(" ", 1)[0] + "…"
@@ -702,9 +747,9 @@ def extract_core_issue(events: list[dict[str, Any]], industry: str) -> str:
             )
             prompt = (
                 f"Read this conversation history of multiple sessions. What is the active customer issue or request? "
-                f"Extract it in one concise sentence (maximum 12 words). "
+                f"Extract it in one concise sentence (maximum 20 words. Output only the sentence, nothing else.). "
                 f"Be specific (e.g. 'Book appointment with Dr. Tasneem Akhtar'), "
-                f"avoiding generic status updates like 'We will reach at 11:30' or 'Yes'.\n\n"
+                f"avoiding generic status updates like 'We will reach at 11:30' or 'Yes'. Respond in English only.\n\n"
                 f"Transcript:\n{transcript}\n\n"
                 f"Core Issue:"
             )

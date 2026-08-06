@@ -76,8 +76,10 @@ To resolve context isolation and memory leakage, the following core orchestratio
 - **Strict Mobile Normalization**: Enforced `normalize_mobile()` globally within `analytics.get_profile()` to stop format mismatches from silently returning empty profiles.
 - **Routing Priority**: `get_contextual_welcome` now prioritizes the strictly computed analytics profile over raw Mem0 data, preventing generic greetings from masking actual customer issues.
 - **Handoff Noise Filtering**: Deduplicates and scrubs (`is_greeting`) raw `mem0_facts` before rendering them in the agent handoff context card.
-- **Targeted Mem0 Lifecycle**: Memory extraction (`infer=True`) is correctly tagged with `metadata={"memory_type": "session_summary"}` and checked prior to push, avoiding redundant syncs on live-chat metadata.
+- **Targeted Mem0 Lifecycle**: Memory extraction (`infer=True`) is correctly tagged with `metadata={"memory_type": "session_summary"}` and checked prior to push, avoiding redundant syncs on live-chat metadata. Individual message inserts via `save_customer_memory` now default to `infer=False` to prevent noisy, fragmented memories and LLM rate-limit exhaustion.
 - **Asynchronous Processing**: Shifted the Mem0 escalation push to a background thread to unblock the `GET /api/inbox/context-card` request path.
+- **Qdrant Vector Storage**: Migrated off Pinecone to a purely local Qdrant vector store (`mem0-groq-local`) to bypass cloud credential issues while still utilizing Groq's high-speed inference for summary generation.
+- **System Role Enforcement**: LLM-generated session summaries are now pushed to Mem0 under the `role="system"` (instead of `customer`) so Mem0 correctly extracts durable facts without confusing them for raw conversational filler.
 
 ## Fully free mode
 

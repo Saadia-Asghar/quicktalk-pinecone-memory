@@ -15,7 +15,7 @@ from mem0_memory import create_memory_store
 from pinecone_memory import MemoryStore, build_handoff_bullets, normalize_mobile
 from tool_calling import TOOL_DEFINITIONS, ToolRegistry
 
-load_dotenv()
+load_dotenv(override=True)
 
 
 def create_app(store: MemoryStore | None = None, analytics_repository=None) -> Flask:
@@ -43,8 +43,8 @@ def create_app(store: MemoryStore | None = None, analytics_repository=None) -> F
 
     @app.errorhandler(RuntimeError)
     def backend_error(error):
-        app.logger.exception("Memory backend failure")
-        return jsonify({"error": "memory_backend_unavailable", "detail": str(error)}), 503
+        app.logger.exception("Runtime error inside backend")
+        return jsonify({"error": "service_unavailable", "detail": str(error)}), 503
 
     @app.get("/")
     def index():
@@ -82,7 +82,7 @@ def create_app(store: MemoryStore | None = None, analytics_repository=None) -> F
             organization_id=body["organization_id"], session_id=body["session_id"],
             mobile_no=body["mobile_no"], text=body["text"],
             role=body.get("role", "customer"), timestamp=body.get("timestamp"),
-            infer=False,
+            infer=body.get("infer", False),
         )
         analytics.record_memory(record)
         return jsonify(record), 201

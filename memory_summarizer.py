@@ -17,7 +17,7 @@ def summarize_profile(memories: list[dict[str, Any]]) -> str:
     prompt = (
         "Summarize this customer's last 30 days for a human support agent in 3 concise "
         "sentences. State the latest issue, resolution status, sentiment, and useful prior context. "
-        "Do not invent facts.\n\n" + _memory_text(memories)
+        "Do not invent facts. Respond in English only.\n\n" + _memory_text(memories)
     )
     return _ollama(prompt) or _fallback_summary(memories)
 
@@ -56,7 +56,7 @@ def contextual_welcome(memories: list[dict[str, Any]], latest_session_summary: s
     prompt = (
         "You are a warm, friendly customer support agent. Write ONE welcome sentence to greet a returning customer. "
         "Reference their previous issue naturally and ask if it has been resolved or if they need further help. "
-        "Do NOT use hyphens or em-dashes. Do NOT mention databases, memory, or AI. Maximum 25 words.\n\n"
+        "Do NOT use hyphens or em-dashes. Do NOT mention databases, memory, or AI. Maximum 25 words. Respond in English only.\n\n"
         f"Customer's previous issue: {context_text}\n\nWelcome message:"
     )
     generated = _ollama(prompt)
@@ -155,12 +155,22 @@ def _ollama(prompt: str) -> str | None:
                         pass
                     print(f"Groq 429 Rate Limit hit. Retrying in {retry_after:.2f}s...")
                     time.sleep(retry_after)
+                elif 400 <= e.code < 500:
+                    print(f"Warning: Groq API call failed (attempt {attempt+1}): {e}")
+                    break
+                else:
+                    if attempt < max_retries - 1:
+                        print(f"Warning: Groq API call failed (attempt {attempt+1}): {e}. Retrying...")
+                        time.sleep(5.0)
+                    else:
+                        break
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    print(f"Warning: Groq API call failed (attempt {attempt+1}): {e}. Retrying...")
+                    time.sleep(5.0)
                 else:
                     print(f"Warning: Groq API call failed (attempt {attempt+1}): {e}")
                     break
-            except Exception as e:
-                print(f"Warning: Groq API call failed (attempt {attempt+1}): {e}")
-                break
 
     # 2. Gemini API Routing (Free-Tier Google AI Studio)
     gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
@@ -180,16 +190,22 @@ def _ollama(prompt: str) -> str | None:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        try:
-            with urllib.request.urlopen(request, timeout=10.0) as response:
-                result = json.loads(response.read().decode("utf-8"))
-            candidates = result.get("candidates", [])
-            if candidates:
-                parts = candidates[0].get("content", {}).get("parts", [])
-                if parts:
-                    return str(parts[0].get("text", "")).strip()
-        except Exception as e:
-            print(f"Warning: Gemini API call failed: {e}")
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(request, timeout=10.0) as response:
+                    result = json.loads(response.read().decode("utf-8"))
+                candidates = result.get("candidates", [])
+                if candidates:
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    if parts:
+                        return str(parts[0].get("text", "")).strip()
+                break
+            except Exception as e:
+                if attempt < 2:
+                    print(f"Warning: Gemini API call failed (attempt {attempt+1}): {e}. Retrying in 10s...")
+                    time.sleep(10.0)
+                else:
+                    print(f"Warning: Gemini API call failed: {e}")
 
     # 3. Local Ollama Fallback
     if os.getenv("OLLAMA_SUMMARIZER_ENABLED", "false").lower() != "true":
