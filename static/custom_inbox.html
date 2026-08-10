@@ -102,36 +102,13 @@
       </div>
     </section>
 
-    <!-- Right Column: Customer At A Glance, Mem0 & Session History -->
+    <!-- Right Column: one LLM summary per session; details expand on demand -->
     <aside class="panel context">
       <div class="label">Human agent view</div>
-      <h2 style="margin:4px 0 8px 0; font-size:18px;">Customer at a glance</h2>
-      <div class="status" id="customerId" style="font-weight:700; color:#2b6cb0;">No customer profile loaded.</div>
-      
-      <ul class="profile-points">
-        <li><strong>📌 Active Issue & Progression:</strong> <span id="currentIssue">Click “Escalate to human”.</span></li>
-        <li style="display:flex; justify-content:space-between; align-items:center;">
-          <div><strong>Status:</strong></div>
-          <span class="badge" id="profileStatus">Unknown</span>
-        </li>
-        <li><strong>🔹 Previous Support Action:</strong> <span id="previousAction">—</span></li>
-        <li class="next-point"><strong>✅ Recommended Next Action:</strong> <span id="nextAction">—</span></li>
-      </ul>
-
-      <div class="stats">
-        <div class="stat"><strong id="recentContacts">—</strong><span>Recent contacts</span></div>
-        <div class="stat"><strong id="previousSessions">—</strong><span>Total sessions</span></div>
-        <div class="stat"><strong id="memoryTotal">—</strong><span>Memories</span></div>
-      </div>
-
-      <div class="label" style="margin-top:15px; margin-bottom:5px;">Durable Memories (Mem0)</div>
-      <div class="card" style="background:#f4f7fb; margin-bottom:15px; padding:10px;">
-        <ul id="mem0Facts" style="padding-left:18px; margin:0; font-size:12px; line-height:1.4;">
-          <li style="color:#718096; list-style-type:none; margin-left:-18px;">No durable memories extracted yet.</li>
-        </ul>
-      </div>
-
-      <div class="status" id="memoryCount" style="font-size:10px; color:#718096;">No handoff loaded.</div>
+      <!-- Customer at a glance is intentionally represented only by expandable session summaries. -->
+      <h2 style="margin:4px 0 4px 0; font-size:18px;">Previous conversation summaries</h2>
+      <div class="status" id="customerId">Click “Escalate to human” to load this customer’s sessions.</div>
+      <div class="status" id="memoryCount" style="font-size:10px; color:#718096;">Mem0 stores conversation history. The LLM summarizes each session separately.</div>
       <div class="history" id="history"></div>
       <button class="secondary" id="older" hidden>Load older sessions</button>
     </aside>
@@ -164,7 +141,8 @@
     };
 
     const invoke=async(name,args)=>{
-      const response=await apiFetch(`/api/tools/${name}/invoke`,{method:'POST',headers,body:JSON.stringify({arguments:args})});
+      const scopedHeaders={...headers,...(args.organization_id?{'X-Organization-Scope':args.organization_id}:{})};
+      const response=await apiFetch(`/api/tools/${name}/invoke`,{method:'POST',headers:scopedHeaders,body:JSON.stringify({arguments:args})});
       const body=await response.json();
       if(!response.ok)throw new Error(body.detail||body.error||'Request failed');
       return body.result;
@@ -211,15 +189,17 @@
         badge.textContent=resolved?'Resolved':'Needs Action';
         head.append(title,badge);
 
-        const box=document.createElement('div');
+        const box=document.createElement('details');
         box.className='session-summary-box';
-        let html=`<div><span class="summary-label">📌 Issue:</span> ${parts.issue}</div>`;
+        const source=s.summary_source==='llm'?'LLM summary':'Fallback summary';
+        let html=`<summary><strong>${parts.issue}</strong></summary><div style="margin-top:8px"><span class="summary-label">Issue:</span> ${parts.issue}</div>`;
         if(parts.action && parts.action!=='No support action recorded.'){
           html+=`<div><span class="summary-label">🔹 Action:</span> ${parts.action}</div>`;
         }
         if(parts.outcome && parts.outcome!=='Pending response.'){
           html+=`<div><span class="summary-label">✅ Outcome:</span> <strong>${parts.outcome}</strong></div>`;
         }
+        html+=`<div class="event-meta">${source} · ${s.message_count} messages</div>`;
         box.innerHTML=html;
 
         const meta=document.createElement('div');
@@ -242,50 +222,12 @@
     };
 
     const renderProfile=r=>{
-      const resolved=r.status==='resolved';
-      $('customerId').textContent=`+${r.mobile_no.replace(/\D/g,'')}`;
-      const issueSpan=$('currentIssue');
-      const issueText=r.current_issue || '';
-      if(issueText.includes('|')){
-        const parts=issueText.split('|').map(p=>p.trim()).filter(Boolean);
-        let html='<ul style="margin:4px 0 0 0; padding-left:18px; line-height:1.45; color:#2d3748;">';
-        parts.forEach(pt=>{ html += `<li style="margin:3px 0;">${pt}</li>`; });
-        html += '</ul>';
-        issueSpan.innerHTML = html;
-      }else if(issueText.includes('; ')){
-        const parts=issueText.split('; ').map(p=>p.trim()).filter(Boolean);
-        let html='<ul style="margin:4px 0 0 0; padding-left:18px; line-height:1.45; color:#2d3748;">';
-        parts.forEach(pt=>{ html += `<li style="margin:3px 0;">${pt}</li>`; });
-        html += '</ul>';
-        issueSpan.innerHTML = html;
-      }else{
-        issueSpan.textContent = issueText;
-      }
-      $('profileStatus').className=`badge ${resolved?'resolved':''}`;
-      $('profileStatus').textContent=resolved?'Resolved':'Needs action';
-      $('recentContacts').textContent=r.recent_contacts;
-      $('previousSessions').textContent=r.previous_session_count;
-      $('memoryTotal').textContent=r.memory_count;
-      $('previousAction').textContent=r.previous_action;
-      $('nextAction').textContent=r.recommended_next_action;
-      
+      $('customerId').textContent=`${r.mobile_no} · ${r.previous_session_count} sessions`;
       renderSessions(r.session_summaries);
       populateSessionsDropdown(r.session_summaries);
-
-      const mem0List=$('mem0Facts');
-      mem0List.innerHTML='';
-      if(r.mem0_facts && r.mem0_facts.length>0){
-        r.mem0_facts.forEach(fact=>{
-          const li=document.createElement('li');
-          li.textContent=fact;
-          mem0List.appendChild(li);
-        });
-      }else{
-        mem0List.innerHTML='<li style="color:#718096; list-style-type:none; margin-left:-18px;">No durable memories extracted yet. Start chatting to build memory.</li>';
-      }
       sessionOffset=r.session_summaries.length;
       $('older').hidden=!r.has_older_sessions;
-      $('memoryCount').textContent=`Updated ${new Date(r.updated_at).toLocaleString()} · cache ${r.cache.hit?'hit':'refreshed'}`;
+      $('memoryCount').textContent=`${r.memory_count} conversation memories · summaries ${r.cache.hit?'cached':'refreshed'}`;
     };
 
     $('composer').addEventListener('submit',async event=>{
@@ -295,8 +237,18 @@
       $('message').value='';
       bubble(text,'customer');
       try{
-        await invoke('save_customer_memory',{...identity(), session_id:$('session').value.trim(), role:'customer', text});
-        bubble('Message saved and the customer profile was refreshed.','assistant');
+        const context={...identity(),session_id:$('session').value.trim()};
+        await invoke('save_customer_memory',{...context,role:'customer',text});
+        const approved=await invoke('search_approved_knowledge',{organization_id:identity().organization_id,query:text,limit:5});
+        let answer;
+        if(approved.status==='answer_found'){
+          answer=approved.answer;
+        }else{
+          const recalled=await invoke('search_customer_memory',{...identity(),query:text,limit:8,generate_answer:true});
+          answer=recalled.answer||'I could not find relevant information in previous conversations.';
+        }
+        bubble(answer,'assistant');
+        await invoke('save_customer_memory',{...context,role:'assistant',text:answer});
       }catch(error){
         bubble(`Memory error: ${error.message}`,'assistant');
       }
@@ -317,7 +269,7 @@
     $('handoff').addEventListener('click',async()=>{
       const button=$('handoff');
       button.disabled=true;
-      button.textContent='Loading profile…';
+      button.textContent='Loading session summaries…';
       try{
         renderProfile(await invoke('get_handoff_context',identity()));
       }catch(error){
@@ -337,7 +289,6 @@
         return;
       }
       renderSessions(profile.session_summaries,true);
-      if($('previousSessions')&&profile.previous_session_count)$('previousSessions').textContent=profile.previous_session_count;
       sessionOffset+=profile.session_summaries.length;
       $('older').hidden=!profile.has_older_sessions;
     });

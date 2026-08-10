@@ -160,7 +160,7 @@ class FlaskMemoryServiceTests(unittest.TestCase):
         names = {tool["function"]["name"] for tool in listed.get_json()["tools"]}
         self.assertEqual(names, {
             "save_customer_memory", "search_customer_memory", "get_handoff_context",
-            "get_contextual_welcome",
+            "get_contextual_welcome", "search_approved_knowledge",
         })
 
         arguments = {
@@ -179,6 +179,26 @@ class FlaskMemoryServiceTests(unittest.TestCase):
             "internet issue" in summary[0] or
             "internet" in summary[0].lower()
         )
+
+    @patch("memory_summarizer._ollama", return_value="Your previous appointment was with Dr. Ahmed on 12 August at 3 PM.")
+    def test_semantic_memory_search_can_generate_grounded_cross_session_answer(self, _llm):
+        old = {
+            "organization_id": "org-health", "session_id": "old-session",
+            "mobile_no": "+923331234567", "role": "assistant",
+            "text": "Appointment booked with Dr. Ahmed on 12 August at 3 PM.",
+        }
+        self.client.post("/api/tools/save_customer_memory/invoke", json={"arguments": old})
+        response = self.client.post("/api/tools/search_customer_memory/invoke", json={
+            "arguments": {
+                "organization_id": "org-health", "mobile_no": "+923331234567",
+                "query": "Who was my previous appointment with?", "generate_answer": True,
+            }
+        })
+        result = response.get_json()["result"]
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(result["retrieval"], "mem0-semantic")
+        self.assertTrue(result["grounded"])
+        self.assertIn("Dr. Ahmed", result["answer"])
 
     def test_unknown_tool_is_json_404(self):
         response = self.client.post("/api/tools/not-a-tool/invoke", json={})

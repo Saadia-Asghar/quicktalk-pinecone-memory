@@ -61,11 +61,45 @@ def contextual_welcome(memories: list[dict[str, Any]], latest_session_summary: s
     )
     generated = _ollama(prompt)
     if generated:
-        # Strip surrounding quotes if the LLM added them
         quoted = re.findall(r'"([^"\n]+)"', generated)
         return (quoted[-1] if quoted else generated).strip()
     return _fallback_welcome(context_text)
 
+
+def answer_from_memories(query: str, memories: list[dict[str, Any]]) -> str:
+    """Create a grounded reply from tenant-scoped semantic memory results."""
+    useful = []
+    seen = set()
+    for item in memories:
+        text = str(item.get("text") or item.get("memory") or "").strip()
+        if not text or text.casefold() == query.strip().casefold() or text.casefold() in seen:
+            continue
+        seen.add(text.casefold())
+        useful.append({
+            "timestamp": str(item.get("timestamp", "")),
+            "session_id": str(item.get("session_id", "")),
+            "role": str(item.get("role", "memory")),
+            "text": text,
+        })
+    if not useful:
+        return "I could not find that information in your previous conversations."
+
+    context = "\n".join(
+        f"[{item['timestamp']}] [{item['session_id']}] {item['role']}: {item['text']}"
+        for item in useful[:10]
+    )
+    prompt = (
+        "Answer the customer using only the retrieved conversation memories below. "
+        "Resolve references such as 'previously', 'last time', or 'that appointment' from the memories. "
+        "Never invent a doctor, date, token, ticket, payment, diagnosis, or resolution. "
+        "If the memories do not contain the answer, say you could not find it. "
+        "Be concise and mention that the information comes from a previous conversation when appropriate.\n\n"
+        f"Customer question: {query}\n\nRetrieved memories:\n{context}\n\nAnswer:"
+    )
+    generated = _ollama(prompt)
+    if generated:
+        return generated.strip()
+    return f"From your previous conversation: {useful[0]['text']}"
 
 def summarize_sessions(memories: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return one agent-friendly summary for each conversation session."""

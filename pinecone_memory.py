@@ -98,7 +98,10 @@ class MemoryStore:
             "text": text.strip(),
         }
         if metadata:
-            _allowed = {"memory_type", "category", "sentiment", "resolution_status"}
+            _allowed = {
+                "memory_type", "category", "sentiment", "resolution_status",
+                "article_id", "article_version", "status",
+            }
             record.update({k: v for k, v in metadata.items() if k in _allowed})
         namespace = _namespace(organization_id)
         vector = _embedding(record["text"])

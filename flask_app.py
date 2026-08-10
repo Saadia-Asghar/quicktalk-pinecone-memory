@@ -14,6 +14,7 @@ from analytics import AnalyticsRepository
 from mem0_memory import create_memory_store
 from pinecone_memory import MemoryStore, build_handoff_bullets, normalize_mobile
 from tool_calling import TOOL_DEFINITIONS, ToolRegistry
+from knowledge_base import KnowledgeRepository, KnowledgeService
 
 load_dotenv(override=True)
 
@@ -22,13 +23,15 @@ def create_app(store: MemoryStore | None = None, analytics_repository=None) -> F
     app = Flask(__name__, static_folder="static")
     memory_store = store or create_memory_store()
     analytics = analytics_repository or AnalyticsRepository()
-    tools = ToolRegistry(memory_store, build_handoff_bullets, analytics)
+    knowledge_repository = KnowledgeRepository(analytics.path)
+    knowledge = KnowledgeService(knowledge_repository, memory_store)
+    tools = ToolRegistry(memory_store, build_handoff_bullets, analytics, knowledge)
 
     @app.before_request
     def authenticate():
         expected = os.getenv("SERVICE_API_KEY")
         if not expected or request.endpoint in {
-            "index", "health", "static", "custom_inbox", "organization_dashboard", "list_demo_users", "session_messages"
+            "index", "health", "static", "context_card", "inbox_welcome", "analytics_dashboard", "customer_profile", "list_demo_users", "session_messages", "custom_inbox_route", "dashboard_route", "knowledge_route"
         }:
             return None
         supplied = request.headers.get("X-API-Key", "")
@@ -50,6 +53,36 @@ def create_app(store: MemoryStore | None = None, analytics_repository=None) -> F
     def index():
         return send_from_directory(app.static_folder, "inbox.html")
 
+    @app.get("/custom")
+    def custom_inbox_route():
+        return send_from_directory(app.static_folder, "custom_inbox.html")
+
+    @app.get("/dashboard")
+    def dashboard_route():
+        return send_from_directory(app.static_folder, "analytics_dashboard.html")
+
+    @app.get("/knowledge")
+    def knowledge_route():
+        return send_from_directory(app.static_folder, "knowledge_portal.html")
+
+    def request_scope(body=None) -> str:
+        body = body or {}
+        supplied = str(body.get("organization_id") or request.args.get("organization_id") or "").strip()
+        claimed = request.headers.get("X-Organization-Scope", "").strip()
+        if not supplied:
+            supplied = claimed
+        if not supplied:
+            raise BadRequest("organization_id is required")
+        if claimed and not hmac.compare_digest(claimed, supplied):
+            raise BadRequest("organization scope does not match authenticated scope")
+        return supplied
+
+    def require_role(*allowed: str) -> str:
+        role = request.headers.get("X-User-Role", "organization_admin")
+        if role not in allowed:
+            raise BadRequest("insufficient role for this operation")
+        return request.headers.get("X-User-ID", "demo-user")
+
     @app.get("/api/health")
     def health():
         return jsonify({
@@ -65,6 +98,10 @@ def create_app(store: MemoryStore | None = None, analytics_repository=None) -> F
     def invoke_tool(tool_name: str):
         body = request.get_json(force=True)
         arguments = body.get("arguments", body)
+        claimed_scope = request.headers.get("X-Organization-Scope", "").strip()
+        argument_scope = str(arguments.get("organization_id") or "").strip() if isinstance(arguments, dict) else ""
+        if claimed_scope and argument_scope and not hmac.compare_digest(claimed_scope, argument_scope):
+            raise BadRequest("organization scope does not match authenticated scope")
         try:
             result = tools.invoke(tool_name, arguments)
         except KeyError as exc:
@@ -168,6 +205,64 @@ def create_app(store: MemoryStore | None = None, analytics_repository=None) -> F
         except ValueError as exc:
             raise BadRequest("days must be an integer") from exc
         return jsonify(analytics.dashboard(organization_id, days))
+
+    @app.get("/api/agent-chats")
+    def list_agent_chats():
+        scope = request_scope()
+        return jsonify({"sessions": knowledge_repository.list_sessions(scope)})
+
+    @app.post("/api/agent-chats")
+    def create_agent_chat():
+        body = request.get_json(force=True)
+        scope = request_scope(body)
+        actor = require_role("human_agent", "organization_admin")
+        agent_id = str(body.get("agent_id") or actor)
+        customer_id = str(body.get("customer_id") or "").strip()
+        if not customer_id:
+            raise BadRequest("customer_id is required")
+        return jsonify(knowledge_repository.create_session(scope, customer_id, agent_id)), 201
+
+    @app.post("/api/agent-chats/<session_id>/messages")
+    def add_agent_chat_message(session_id: str):
+        body = request.get_json(force=True)
+        scope = request_scope(body)
+        require_role("human_agent", "organization_admin")
+        return jsonify(knowledge_repository.add_message(
+            scope, session_id, str(body.get("sender_role", "")), str(body.get("text", "")),
+        )), 201
+
+    @app.post("/api/agent-chats/<session_id>/close")
+    def close_agent_chat(session_id: str):
+        body = request.get_json(silent=True) or {}
+        scope = request_scope(body)
+        require_role("human_agent", "organization_admin")
+        return jsonify(knowledge.close_and_index(scope, session_id))
+
+    @app.get("/api/knowledge/articles")
+    def list_knowledge_articles():
+        scope = request_scope()
+        return jsonify({"articles": knowledge_repository.list_articles(scope)})
+
+    @app.patch("/api/knowledge/articles/<article_id>")
+    def edit_knowledge_article(article_id: str):
+        body = request.get_json(force=True)
+        scope = request_scope(body)
+        actor = require_role("organization_admin")
+        answer = str(body.get("answer") or "").strip()
+        if not answer:
+            raise BadRequest("answer is required")
+        return jsonify(knowledge.edit_and_index(
+            scope, article_id, str(body.get("question") or ""), answer, actor,
+        ))
+
+    @app.post("/api/knowledge/articles/<article_id>/status")
+    def set_knowledge_article_status(article_id: str):
+        body = request.get_json(force=True)
+        scope = request_scope(body)
+        actor = require_role("organization_admin")
+        return jsonify(knowledge_repository.set_status(
+            scope, article_id, str(body.get("status") or ""), actor,
+        ))
 
     @app.get("/api/profiles/<path:mobile_no>")
     def customer_profile(mobile_no: str):

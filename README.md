@@ -312,3 +312,26 @@ sequenceDiagram
 For production, replace the deterministic demo embedding function with the
 organization's approved embedding model and create the Pinecone index using
 that model's vector dimension.
+# Auto-approved human-agent knowledge
+
+The Flask service includes an organization knowledge manager at `/knowledge`.
+Every verified human-agent portal chat is stored when closed, converted into a
+redacted reusable question/answer, automatically approved, and indexed for
+live bot retrieval. PostgreSQL-compatible SQLite tables remain authoritative;
+Pinecone/Mem0 is the retrieval projection.
+
+Live retrieval order is approved organization knowledge first, followed by
+customer-specific Mem0 conversation history. Organization administrators can
+edit an answer (creating a newer automatically active version), disable it,
+delete it, or restore it. Superseded versions remain in the audit record and
+are rejected during retrieval.
+
+Main endpoints:
+
+- `POST /api/agent-chats`
+- `POST /api/agent-chats/<id>/messages`
+- `POST /api/agent-chats/<id>/close`
+- `GET /api/knowledge/articles`
+- `PATCH /api/knowledge/articles/<id>`
+- `POST /api/knowledge/articles/<id>/status`
+- Flask tool: `search_approved_knowledge`

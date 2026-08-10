@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from analytics import AnalyticsRepository, classify_category
+from analytics import AnalyticsRepository, classify_category, detect_knowledge_gap
 
 
 class AnalyticsTests(unittest.TestCase):
@@ -50,6 +50,17 @@ class AnalyticsTests(unittest.TestCase):
     def test_unknown_organization_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "Unknown organization"):
             self.repo.dashboard("tenant-does-not-exist")
+
+    def test_only_explicit_no_answer_is_a_missing_knowledge_gap(self):
+        customer = [{"text": "Do you provide treatment for a rare condition?"}]
+        explicit = [{"text": "I apologize, but I cannot answer because this is outside my knowledge base."}]
+        operational = [{"text": "I will escalate your booking request to the appointment team."}]
+        gap = detect_knowledge_gap(customer, explicit, "Other")
+        not_gap = detect_knowledge_gap(customer, operational, "Appointments")
+        self.assertTrue(gap["knowledge_gap"])
+        self.assertEqual(gap["knowledge_gap_type"], "missing_knowledge")
+        self.assertIn("rare condition", gap["knowledge_gap_question"].lower())
+        self.assertFalse(not_gap["knowledge_gap"])
 
     def _record(self, memory_id: str, scope: str, text: str) -> None:
         self.repo.record_memory(
