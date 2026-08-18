@@ -335,3 +335,9 @@ Main endpoints:
 - `PATCH /api/knowledge/articles/<id>`
 - `POST /api/knowledge/articles/<id>/status`
 - Flask tool: `search_approved_knowledge`
+
+# Historical JSON Import & Bot Training
+A heavy-duty backfill script `import_agent_history.py` is included in the project root to securely ingest large JSON dumps (e.g., thousands of historical chat sessions) into the SQL tables and Mem0 vector space.
+- **Bulk Insert:** Raw events are securely batched into `analytics.db`.
+- **Mem0 Extraction:** Session summaries are pushed to Mem0 using `infer=True` with exponential backoff to respect Groq/Gemini LLM API rate limits. 
+- **LLM Tool Execution:** Autonomous agents can trigger this 3-hour extraction task asynchronously using the `import_agent_history_from_json` tool found in `tool_calling.py`.

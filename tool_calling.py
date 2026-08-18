@@ -70,6 +70,18 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "import_agent_history_from_json",
+            "description": "Trigger a background process to import and train the bot on the 16,500+ agent chat histories from the specified JSON file. Returns immediately while processing continues in background.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_contextual_welcome",
             "description": "Generate a real-time welcome from the customer's latest 30-day memory.",
             "parameters": {
@@ -99,6 +111,22 @@ TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_customer_memory_context",
+            "description": "Call this tool at the start of a new chat session to load the user's past memories and durable facts.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "organization_id": {"type": "string"},
+                    "mobile_no": {"type": "string"},
+                },
+                "required": ["organization_id", "mobile_no"],
+                "additionalProperties": False,
+            },
+        },
+    },
 ]
 
 
@@ -112,6 +140,14 @@ class ToolRegistry:
     def invoke(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(arguments, dict):
             raise ValueError("arguments must be a JSON object")
+            
+        if name == "import_agent_history_from_json":
+            import subprocess
+            import os
+            script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "import_agent_history.py")
+            subprocess.Popen(["python", script_path])
+            return {"status": "success", "message": "Import script has been launched in the background. It will process 16,588 sessions and extract durable facts via Mem0."}
+
         if name == "save_customer_memory":
             self._require(arguments, "organization_id", "session_id", "mobile_no", "text")
             record = self.store.add(
