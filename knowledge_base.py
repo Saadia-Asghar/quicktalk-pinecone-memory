@@ -63,6 +63,25 @@ def _prompt(name: str, **values: str) -> str:
     return template
 
 
+def _safe_tone_output(generated: str | None, original: str) -> str:
+    """Accept only clean customer-facing text; never expose reasoning or prompt content."""
+    if not generated:
+        return original
+    cleaned = str(generated).strip()
+    cleaned = re.sub(r"<think>.*?</think>", "", cleaned, flags=re.I | re.S).strip()
+    unsafe_markers = (
+        "<think", "</think", "thinking process", "analyze user input", "style_guidance",
+        "**task", "**constraints", "**response", "return only the rewritten response",
+        "rewrite response", "system prompt", "developer message",
+    )
+    lowered = cleaned.casefold()
+    if not cleaned or any(marker in lowered for marker in unsafe_markers):
+        return original
+    if len(cleaned) > max(600, len(original) * 3):
+        return original
+    return cleaned.strip(' "')
+
+
 _NON_ANSWER_PATTERNS = (
     r"\b(?:will|shall)\s+(?:assist|contact|call|reply|respond|check)\b",
     r"\b(?:contact|connect(?:ed)?|transfer(?:red)?|forward(?:ed)?)\s+(?:you\s+)?(?:to|with)\b",
@@ -512,8 +531,8 @@ class KnowledgeService:
     def apply_tone(self, organization_scope: str, answer: str) -> tuple[str, dict[str, Any]]:
         profile = self.repository.tone_profile(organization_scope)
         prompt = _prompt("tone_response.txt", style_guidance=profile["style_guidance"], response=answer)
-        styled = _ollama(prompt, workload="knowledge", timeout=2.0, max_retries=1) or answer
-        return styled.strip(), profile
+        generated = _ollama(prompt, workload="knowledge", timeout=2.0, max_retries=1)
+        return _safe_tone_output(generated, answer), profile
 
     def search(self, organization_scope: str, query: str, limit: int = 5) -> dict[str, Any]:
         matches = self.memory_store.search(

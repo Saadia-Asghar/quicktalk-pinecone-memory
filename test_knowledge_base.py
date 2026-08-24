@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pinecone_memory
 from analytics import AnalyticsRepository
 from flask_app import create_app
-from knowledge_base import KnowledgeRepository, KnowledgeService
+from knowledge_base import KnowledgeRepository, KnowledgeService, _safe_tone_output
 from pinecone_memory import MemoryStore
 
 
@@ -88,6 +88,19 @@ class KnowledgeBaseTests(unittest.TestCase):
         })
         self.assertEqual(updated["controlled_facts"]["consultation_fee"],
                          "require doctor/location and effective date")
+
+    def test_tone_output_never_leaks_reasoning_or_prompt(self):
+        original = "Welcome back! Is your previous internet issue resolved?"
+        leaked = (
+            "<think>Here's a thinking process: Analyze User Input. **Task:** Rewrite RESPONSE "
+            "using STYLE_GUIDANCE. **Constraints:** Return only the rewritten response."
+        )
+        self.assertEqual(_safe_tone_output(leaked, original), original)
+        completed_thought = "<think>private reasoning</think>Sure, is your internet issue resolved?"
+        self.assertEqual(
+            _safe_tone_output(completed_thought, original),
+            "Sure, is your internet issue resolved?",
+        )
 
     def test_price_knowledge_requires_scope_currency_and_validity(self):
         rejected = self.repository.create_session("org-price-bad", "customer", "agent")

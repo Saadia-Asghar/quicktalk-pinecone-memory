@@ -379,9 +379,9 @@ class ToolRegistry:
                     summary_text = profile.get("session_summaries", [{}])[0].get("summary", "") if profile.get("session_summaries") else ""
                     if summary_text:
                         issue_match = re.search(r"issue:\s*(.*?)(?:\s+action:|\s+outcome:|\s*$)", summary_text, re.I | re.DOTALL)
-                        short = issue_match.group(1).strip().rstrip(".!?")[:100] if issue_match else summary_text.strip().rstrip(".!?")[:100]
+                        short = issue_match.group(1).strip().rstrip(" .!?|")[:100] if issue_match else summary_text.strip().rstrip(" .!?|")[:100]
                     else:
-                        short = profile.get("current_issue", "").strip().rstrip(".!?")[:100]
+                        short = profile.get("current_issue", "").strip().rstrip(" .!?|")[:100]
                     welcome = f'Welcome back! During our last session, we were discussing "{short}". '
                     welcome += "Has that been fully resolved, or do you need further assistance with it today?"
                     tone = None
