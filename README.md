@@ -94,8 +94,8 @@ flowchart LR
 ## Answer and memory flow
 
 1. Chat opens: load the contextual welcome and organization tone.
-2. Customer sends a message: search that customer's tenant-scoped Mem0 history.
-3. If memory does not answer: search bot KB first, then approved human-agent knowledge.
+2. If the question explicitly asks about personal history, search that customer's tenant-scoped Mem0 history.
+3. General questions skip customer memory and search bot KB first, then approved human-agent knowledge.
 4. If both miss: return a safe apology and record a missing-knowledge event.
 5. Apply organization tone to the final customer-facing answer.
 6. Save customer and assistant messages with organization, mobile, session and timestamp.
@@ -110,7 +110,7 @@ Tools use `POST /api/tools/<tool_name>/invoke` with `{"arguments": {...}}`.
 | Tool | Active when | What it does |
 |---|---|---|
 | `save_customer_memory` | After customer/assistant messages | Saves tenant/customer/session-scoped memory and analytics. |
-| `search_customer_memory` | Customer sends a message | Recalls that customer's prior conversations; tone is applied to generated answers. |
+| `search_customer_memory` | Customer explicitly asks about prior/personal context | Recalls that customer's prior conversations; general policy questions skip Mem0. |
 | `get_customer_memory_context` | New session initialization | Returns recent profile, current issue, previous-session count and summaries. |
 | `get_contextual_welcome` | Chat opens or identity changes | Creates a returning-customer welcome and applies organization tone. |
 | `get_handoff_context` | Human escalation | Returns three concise bullets, counts and expandable session summaries. |

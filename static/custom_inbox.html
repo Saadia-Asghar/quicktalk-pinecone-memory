@@ -246,7 +246,7 @@
         await invoke('save_customer_memory',{...context,role:'customer',text});
         const topScore=Number(recalled.items?.[0]?.score||0);
         let answer;
-        if(recalled.count>0&&topScore>=0.65){
+        if(recalled.answer_eligible&&recalled.count>0&&topScore>=0.65){
           answer=recalled.answer;
         }else{
           const resolved=await invoke('resolve_support_answer',{...identity(),session_id:context.session_id,query:text,limit:5});

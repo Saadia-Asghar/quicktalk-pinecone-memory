@@ -7,6 +7,7 @@ import pinecone_memory
 from analytics import AnalyticsRepository
 from flask_app import create_app
 from knowledge_base import KnowledgeRepository, KnowledgeService, _safe_tone_output
+from tool_calling import _requests_customer_history
 from pinecone_memory import MemoryStore
 
 
@@ -40,7 +41,9 @@ class KnowledgeBaseTests(unittest.TestCase):
         self.assertEqual(article["status"], "active")
         self.assertEqual(article["active_version"], 1)
         self.assertEqual(article["approved_by"], "application:auto-agent-chat")
-        self.assertEqual(self.service.search("org-a", "Can installation happen on weekends?")["status"], "answer_found")
+        found = self.service.search("org-a", "Can installation happen on weekends?")
+        self.assertEqual(found["status"], "answer_found")
+        self.assertEqual(found["retrieval"], "sql-topic-index")
         missing = self.service.search("org-b", "Can installation happen on weekends?")
         self.assertEqual(missing["status"], "no_evidence")
         self.assertFalse(missing["grounded"])
@@ -101,6 +104,32 @@ class KnowledgeBaseTests(unittest.TestCase):
             _safe_tone_output(completed_thought, original),
             "Sure, is your internet issue resolved?",
         )
+
+    def test_general_policy_question_does_not_route_to_customer_memory(self):
+        self.assertFalse(_requests_customer_history("Is weekend installation available?"))
+        self.assertTrue(_requests_customer_history("What did I discuss about installation last time?"))
+        self.assertTrue(_requests_customer_history("When is my appointment?"))
+        analytics = AnalyticsRepository(Path(self.temp.name) / "routing-tool.db")
+        client = create_app(MemoryStore(), analytics).test_client()
+        response = client.post("/api/tools/search_customer_memory/invoke", json={
+            "arguments": {"organization_id": "org-routing", "mobile_no": "+923330000001",
+                          "query": "Is weekend installation available?", "generate_answer": True}
+        })
+        result = response.get_json()["result"]
+        self.assertEqual(result["retrieval"], "skipped-general-question")
+        self.assertEqual(result["count"], 0)
+        self.assertFalse(result["answer_eligible"])
+
+    def test_installation_price_article_cannot_answer_weekend_availability(self):
+        article = self.repository.upsert_article(
+            "org-relevance", "What are the new connection installation charges?",
+            "The current new connection installation charge is PKR 3,000, effective August 2026.",
+            actor="test",
+        )
+        self.service._index(article)
+        result = self.service.search("org-relevance", "Is weekend installation available?")
+        self.assertEqual(result["status"], "no_evidence")
+        self.assertFalse(result["grounded"])
 
     def test_price_knowledge_requires_scope_currency_and_validity(self):
         rejected = self.repository.create_session("org-price-bad", "customer", "agent")

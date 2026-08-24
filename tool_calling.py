@@ -9,6 +9,16 @@ from memory_summarizer import answer_from_memories, contextual_welcome
 from analytics import is_greeting
 
 
+def _requests_customer_history(query: str) -> bool:
+    """Route only explicit personal-history questions to conversational memory answers."""
+    return bool(re.search(
+        r"\b(?:previous(?:ly)?|last\s+(?:time|week|month|session)|earlier|before|remember|remind|"
+        r"discussed|follow[ -]?up|did\s+i|was\s+my|what\s+did\s+i|which\s+doctor\s+did|"
+        r"that\s+(?:appointment|booking|case|ticket)|my\s+(?:previous|last|appointment|booking|"
+        r"doctor|package|plan|case|ticket|request))\b", query, re.I,
+    ))
+
+
 TOOL_DEFINITIONS = [
     {
         "type": "function",
@@ -225,6 +235,10 @@ class ToolRegistry:
         if name == "search_customer_memory":
             self._require(arguments, "organization_id", "mobile_no", "query")
             limit = self._limit(arguments.get("limit", 10))
+            history_intent = _requests_customer_history(str(arguments["query"]))
+            if not history_intent:
+                return {"items": [], "count": 0, "retrieval": "skipped-general-question",
+                        "history_intent": False, "answer_eligible": False, "grounded": False}
             items = self.store.search(
                 organization_id=arguments["organization_id"],
                 mobile_no=arguments["mobile_no"],
@@ -232,8 +246,9 @@ class ToolRegistry:
                 session_id=arguments.get("session_id"),
                 limit=limit,
             )
-            result = {"items": items, "count": len(items), "retrieval": "mem0-semantic"}
-            if arguments.get("generate_answer"):
+            result = {"items": items, "count": len(items), "retrieval": "mem0-semantic",
+                      "history_intent": history_intent, "answer_eligible": history_intent and bool(items)}
+            if arguments.get("generate_answer") and result["answer_eligible"]:
                 answer = answer_from_memories(str(arguments["query"]), items)
                 if self.knowledge:
                     answer, tone = self.knowledge.apply_tone(str(arguments["organization_id"]), answer)

@@ -5,7 +5,7 @@
 | Moment | Automatically activated | Purpose |
 |---|---|---|
 | Chat page opens or identity changes | `get_contextual_welcome` + tone profile | Load latest issue when available and write the greeting in the organization’s style. |
-| Customer sends a message | `search_customer_memory` | Search that customer’s earlier conversations semantically. When it produces an answer, the tone profile is applied. |
+| Customer explicitly asks about prior/personal context | `search_customer_memory` | Search that customer’s earlier conversations semantically. General policy questions skip Mem0 and go directly to knowledge. |
 | Customer memory has no answer | `resolve_support_answer` | Search bot KB first, then active approved human-agent knowledge, then apologize. Tone is applied to the final response every time. |
 | After each customer/assistant message | `save_customer_memory` | Save tenant/customer/session-scoped conversational history to Mem0/Pinecone and the analytics event store. |
 | Bot KB and agent knowledge both miss | `get_missing_knowledge_topics` data is recorded automatically | The resolver records a knowledge-gap event; the reporting tool later aggregates these questions. |

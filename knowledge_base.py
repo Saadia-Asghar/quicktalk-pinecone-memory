@@ -52,6 +52,10 @@ def _tokens(text: str) -> set[str]:
             token = token[:-3] + "y"
         elif token.endswith("s") and len(token) > 4:
             token = token[:-1]
+        token = {
+            "saturday": "weekend", "sunday": "weekend", "weekends": "weekend",
+            "install": "installation", "installed": "installation", "installing": "installation",
+        }.get(token, token)
         result.add(token)
     return result
 
@@ -535,6 +539,15 @@ class KnowledgeService:
         return _safe_tone_output(generated, answer), profile
 
     def search(self, organization_scope: str, query: str, limit: int = 5) -> dict[str, Any]:
+        lexical = [row for row in self.repository.lexical_search(organization_scope, query, limit)
+                   if row["score"] >= 0.50]
+        if lexical:
+            best = lexical[0]
+            return {"status": "answer_found", "answer": best["answer"].strip(), "items": lexical,
+                    "article_id": best["id"], "article_version": best["active_version"],
+                    "answer_source": "approved_agent_knowledge", "grounded": True,
+                    "retrieval": "sql-topic-index",
+                    "searched_sources": ["active_approved_agent_articles"]}
         matches = self.memory_store.search(
             organization_id=organization_scope, mobile_no=KNOWLEDGE_MOBILE,
             query=query, limit=min(max(limit, 1), 20),
@@ -554,12 +567,12 @@ class KnowledgeService:
             article["score"] = float(match.get("score", 0))
             article_tokens = _tokens(article["canonical_question"] + " " + article["answer"])
             shared = len(query_tokens & article_tokens)
-            required_shared = 1 if len(query_tokens) <= 3 else 2
+            required_shared = 1 if len(query_tokens) <= 2 else max(2, (len(query_tokens) + 1) // 2)
             overlap = shared / max(len(query_tokens), 1)
-            if article["score"] >= 0.55 and shared >= required_shared and overlap >= 0.40:
+            if article["score"] >= 0.55 and shared >= required_shared and overlap >= 0.50:
                 verified.append(article)
         if not verified:
-            verified = [row for row in self.repository.lexical_search(organization_scope, query, limit) if row["score"] >= 0.40]
+            verified = [row for row in self.repository.lexical_search(organization_scope, query, limit) if row["score"] >= 0.50]
         if not verified:
             return {
                 "status": "no_evidence",
@@ -573,6 +586,7 @@ class KnowledgeService:
         return {"status": "answer_found", "answer": best["answer"].strip(), "items": verified,
                 "article_id": best["id"], "article_version": best["active_version"],
                 "answer_source": "approved_agent_knowledge", "grounded": True,
+                "retrieval": "mem0-pinecone-semantic",
                 "searched_sources": ["active_approved_agent_articles"]}
 
     def search_bot(self, organization_scope: str, query: str, limit: int = 5) -> dict[str, Any]:
