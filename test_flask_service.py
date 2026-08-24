@@ -14,6 +14,7 @@ from mem0_memory import (
 )
 from flask_app import create_app
 from pinecone_memory import MemoryStore
+from tool_calling import ToolRegistry
 
 
 class FlaskMemoryServiceTests(unittest.TestCase):
@@ -49,6 +50,29 @@ class FlaskMemoryServiceTests(unittest.TestCase):
         self.assertEqual(len(payload["history_summary"]), 3)
         self.assertNotIn("Secret", " ".join(payload["history_summary"]))
         self.assertEqual(payload["memory_count"], 2)
+
+    def test_remote_memory_search_uses_cross_session_scope(self):
+        calls = {}
+
+        class FakeRemoteStore:
+            backend = "mem0-test-pinecone"
+
+            def search(self, **kwargs):
+                calls.update(kwargs)
+                return [{
+                    "text": "Previous appointment was with Dr. Ahmed.",
+                    "session_id": "older-session", "score": 0.91,
+                }]
+
+        registry = ToolRegistry(FakeRemoteStore(), lambda memories: [], None, None)
+        result = registry.invoke("search_customer_memory", {
+            "organization_id": "org-health", "mobile_no": "+923331234567",
+            "session_id": "new-live-session",
+            "query": "Who was my previous appointment with?",
+        })
+        self.assertEqual(result["retrieval"], "mem0-semantic")
+        self.assertTrue(result["answer_eligible"])
+        self.assertIsNone(calls["session_id"])
 
     def test_required_metadata_is_validated(self):
         response = self.client.post("/api/memories", json={"organization_id": "org-a"})

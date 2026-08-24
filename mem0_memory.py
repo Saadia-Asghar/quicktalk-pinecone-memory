@@ -13,6 +13,9 @@ from pinecone_memory import _namespace, normalize_mobile, normalize_timestamp, v
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
+# Mem0 analytics is optional and must never delay customer-facing retrieval.
+# This is set before Mem0 itself is imported lazily by the store classes.
+os.environ.setdefault("MEM0_TELEMETRY", "false")
 
 
 def _extract_mem0_results(payload: Any) -> list[dict]:

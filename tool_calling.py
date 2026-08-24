@@ -5,6 +5,7 @@ from typing import Any
 import threading
 import re
 import os
+import logging
 
 from memory_summarizer import answer_from_memories, contextual_welcome
 from analytics import is_greeting
@@ -257,7 +258,6 @@ class ToolRegistry:
             
         if name == "import_agent_history_from_json":
             import subprocess
-            import os
             script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "import_agent_history.py")
             subprocess.Popen(["python", script_path])
             return {"status": "success", "message": "Import script has been launched in the background. It will process 16,588 sessions and extract durable facts via Mem0."}
@@ -303,13 +303,17 @@ class ToolRegistry:
                         **search_kwargs,
                     )
                     items = search_future.result(
-                        timeout=float(os.getenv("LIVE_MEMORY_SEARCH_TIMEOUT", "5"))
+                        timeout=float(os.getenv("LIVE_MEMORY_SEARCH_TIMEOUT", "45"))
                     )
                     retrieval = "mem0-semantic"
                 except TimeoutError:
                     items = []
                     retrieval = "mem0-timeout"
-                except Exception:
+                except Exception as exc:
+                    logging.getLogger(__name__).warning(
+                        "Mem0/Pinecone search failed for organization %s: %s: %s",
+                        arguments["organization_id"], type(exc).__name__, exc,
+                    )
                     items = []
                     retrieval = "mem0-unavailable"
                 finally:
