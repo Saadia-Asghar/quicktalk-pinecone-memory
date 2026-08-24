@@ -646,15 +646,16 @@ class AnalyticsRepository:
                 )
                 generated = _ollama(prompt)
                 if generated:
-                    cleaned = generated.strip().replace('"', '').replace("'", "").replace("\n", " ")
-                    if "issue:" in cleaned.lower():
+                    raw_cleaned = generated.strip().replace('"', '').replace("'", "").replace("\n", " ")
+                    display_summary = _clean_llm_session_summary(generated)
+                    if display_summary:
+                        cleaned = raw_cleaned
                         gap_match = re.search(r"knowledge gap:\s*(yes|no)", cleaned, re.I)
                         question_match = re.search(r"unanswered question:\s*(.*?)(?:\s*\|\s*gap type:|$)", cleaned, re.I)
                         type_match = re.search(r"gap type:\s*(.*?)(?:\s*\|\s*gap topic:|$)", cleaned, re.I)
                         topic_match = re.search(r"gap topic:\s*(.*?)(?:\s*\|\s*gap reason:|$)", cleaned, re.I)
                         reason_match = re.search(r"gap reason:\s*(.*?)$", cleaned, re.I)
                         llm_gap = bool(gap_match and gap_match.group(1).lower() == "yes")
-                        display_summary = re.split(r"\s*\|\s*knowledge gap:", cleaned, flags=re.I)[0].strip()
                         return {
                             "organization_scope": scope, "mobile_no": mobile_no,
                             "session_id": events[0]["session_id"], "started_at": events[0]["timestamp"],
@@ -678,7 +679,7 @@ class AnalyticsRepository:
             if is_greeting(txt) or len(txt) <= 2:
                 continue
             score = len(txt)
-            if re.search(r"\b(dr|doctor|appointment|book|fee|bill|payment|internet|connectivity|speed|plan|upgrade|medicine|report|claim|insurance|transfer|fraud|kyc)\b", txt, re.I):
+            if re.search(r"\b(dr|doctor|appointment|book|fee|bill|payment|internet|connectivity|fiber|fibre|outage|maintenance|speed|plan|upgrade|medicine|report|claim|insurance|transfer|fraud|kyc)\b", txt, re.I):
                 score += 200
             scored.append((score, txt))
         scored.sort(key=lambda x: x[0], reverse=True)
@@ -686,18 +687,36 @@ class AnalyticsRepository:
 
         # Preserve the original request. A later status update is an outcome, not a new issue.
         cust_texts = [e["text"].strip() for e in customer_events if not is_greeting(e["text"].strip()) and len(e["text"].strip()) > 3]
-        issue = concise_issue(cust_texts[0] if cust_texts else meaningful, limit=120)
+        issue = concise_issue(meaningful, limit=120)
 
-        # Look for assistant transaction confirmation in assistant messages
-        booking_msg = next((e["text"] for e in reversed(assistant_events) if re.search(r"(\b\d{7,10}\b|ملاقات|بک|appointment|token|ticket|confirmed)", e["text"], re.I)), None)
+        # A question mentioning a ticket/appointment is not a confirmation.
+        booking_msg = next((e["text"] for e in reversed(assistant_events)
+                            if "?" not in e["text"] and re.search(
+                                r"(?:appointment.{0,30}(?:booked|confirmed)|token.{0,20}(?:generated|confirmed)|"
+                                r"ticket.{0,20}(?:generated|opened|created)|\bconfirmed\b|ملاقات|بک ہو گئی)",
+                                e["text"], re.I)), None)
         if booking_msg:
             action = "Processed registration and checked slot availability."
             outcome = concise_issue(booking_msg, limit=140)
             resolved = True
         else:
-            action = concise_issue(assistant_events[-1]["text"], limit=100) if assistant_events else "No support action recorded."
-            last_customer_txt = customer_events[-1]["text"].strip() if customer_events else ""
-            outcome = concise_issue(last_customer_txt, limit=140) if len(cust_texts) > 1 else "Pending response."
+            assistant_scored = []
+            for event in assistant_events:
+                text = event["text"].strip()
+                if is_greeting(text) or len(text) < 8:
+                    continue
+                score = len(text) + (150 if re.search(
+                    r"\b(?:fiber|fibre|internet|maintenance|outage|team|working|resolved|appointment|billing|payment)\b",
+                    text, re.I) else 0)
+                assistant_scored.append((score, text))
+            assistant_scored.sort(key=lambda item: item[0], reverse=True)
+            action = concise_issue(assistant_scored[0][1], limit=140) if assistant_scored else "No support action recorded."
+            negative_updates = [event["text"].strip() for event in customer_events if re.search(
+                r"\b(?:still|again|not|no+|failed|cut|down|scam|frustrat|angry|unresolved|everyday)\b",
+                event["text"], re.I)]
+            outcome = concise_issue(max(negative_updates, key=len), limit=140) if negative_updates else "Pending response."
+            if outcome.casefold().strip(" .") == issue.casefold().strip(" ."):
+                outcome = "Resolution was not confirmed in the conversation."
 
         return {
             "organization_scope": scope, "mobile_no": mobile_no,
@@ -1105,3 +1124,25 @@ def extract_core_issue(events: list[dict[str, Any]], industry: str) -> str:
         return concise_issue(scored_messages[0][1])
         
     return concise_issue(customer_events[0]["text"])
+def _clean_llm_session_summary(generated: str | None) -> str | None:
+    """Return only a complete Issue/Action/Outcome summary without reasoning or placeholders."""
+    if not generated:
+        return None
+    cleaned = re.sub(r"<think>.*?</think>", "", str(generated), flags=re.I | re.S).strip()
+    cleaned = cleaned.replace('"', '').replace("'", "").replace("\n", " ")
+    unsafe = (
+        "<think", "</think", "thinking process", "analyze user input", "**task", "**format",
+        "<request>", "<support steps>", "<result>", "contact center ai auditor",
+    )
+    if any(marker in cleaned.casefold() for marker in unsafe):
+        return None
+    match = re.search(
+        r"Issue:\s*(.*?)\s*\|?\s*Action:\s*(.*?)\s*\|?\s*Outcome:\s*(.*?)(?:\s*\|\s*Knowledge gap:|$)",
+        cleaned, re.I | re.S,
+    )
+    if not match:
+        return None
+    parts = [part.strip(" |:.-") for part in match.groups()]
+    if not all(parts) or any(part.casefold() in {"none", "n/a", "unknown"} for part in parts):
+        return None
+    return f"Issue: {parts[0]} Action: {parts[1]} Outcome: {parts[2]}"

@@ -158,15 +158,17 @@
     };
 
     const sessionParts=summary=>{
+      const clean=value=>String(value||'').trim().replace(/^[|:\s]+|[|:\s]+$/g,'');
+      const usable=value=>value&&!/<(?:request|support steps|result)>|thinking process|analyze user input|<think/i.test(value);
       try{
         const obj=JSON.parse(summary);
-        if(obj&&obj.issue) return {issue:obj.issue, action:obj.action||'', outcome:obj.outcome||''};
+        if(obj&&usable(obj.issue)) return {issue:clean(obj.issue), action:clean(obj.action), outcome:clean(obj.outcome)};
       }catch(e){}
       const match=summary.match(/Issue:\s*(.*?)\s+Action:\s*(.*?)\s+Outcome:\s*(.*)$/i);
-      if(match) return {issue:match[1].trim(), action:match[2].trim(), outcome:match[3].trim()};
+      if(match&&usable(match[1])) return {issue:clean(match[1]), action:clean(match[2]), outcome:clean(match[3])};
       const actMatch=summary.match(/Issue:\s*(.*?)\s+Action:\s*(.*)$/i);
-      if(actMatch) return {issue:actMatch[1].trim(), action:actMatch[2].trim(), outcome:''};
-      return {issue:summary, action:'', outcome:''};
+      if(actMatch&&usable(actMatch[1])) return {issue:clean(actMatch[1]), action:clean(actMatch[2]), outcome:''};
+      return {issue:usable(summary)?clean(summary):'Conversation summary unavailable', action:'', outcome:''};
     };
 
     const renderSessions=(sessions,append=false)=>{

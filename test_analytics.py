@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from analytics import AnalyticsRepository, classify_category, detect_knowledge_gap
+from analytics import AnalyticsRepository, _clean_llm_session_summary, classify_category, detect_knowledge_gap
 
 
 class AnalyticsTests(unittest.TestCase):
@@ -61,6 +61,18 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(gap["knowledge_gap_type"], "missing_knowledge")
         self.assertIn("rare condition", gap["knowledge_gap_question"].lower())
         self.assertFalse(not_gap["knowledge_gap"])
+
+    def test_session_summary_rejects_reasoning_placeholders(self):
+        leaked = (
+            "<think>Analyze User Input **Task** **Format** "
+            "Issue: <request> | Action: <support steps> | Outcome: <result>"
+        )
+        self.assertIsNone(_clean_llm_session_summary(leaked))
+        clean = "Issue: Internet disconnects | Action: Reset the router | Outcome: Service restored"
+        self.assertEqual(
+            _clean_llm_session_summary(clean),
+            "Issue: Internet disconnects Action: Reset the router Outcome: Service restored",
+        )
 
     def _record(self, memory_id: str, scope: str, text: str) -> None:
         self.repo.record_memory(
