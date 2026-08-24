@@ -237,7 +237,6 @@
       if(!text)return;
       $('message').value='';
       bubble(text,'customer');
-      const pending=bubble('Searching your previous conversations and support knowledge…','assistant');
       try{
         const context={...identity(),session_id:$('session').value.trim()};
         // Search history before saving the new question so it cannot retrieve itself.
@@ -254,10 +253,10 @@
           answer=resolved.answer;
         }
         answer=answer||'I apologize, but I could not find an answer in our knowledge records.';
-        pending.textContent=answer;
+        bubble(answer,'assistant');
         await invoke('save_customer_memory',{...context,role:'assistant',text:answer});
       }catch(error){
-        pending.textContent=`Memory error: ${error.message}`;
+        bubble(`Memory error: ${error.message}`,'assistant');
       }
     });
 

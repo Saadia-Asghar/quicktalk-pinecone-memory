@@ -36,6 +36,7 @@ class CustomAppTests(unittest.TestCase):
         with self.client.get("/custom") as page:
             self.assertEqual(page.status_code, 200)
             self.assertIn(b"Customer at a glance", page.data)
+            self.assertNotIn(b"Searching your previous conversations", page.data)
 
         identity = {
             "organization_id": "custom-test",
