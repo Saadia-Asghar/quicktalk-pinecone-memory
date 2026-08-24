@@ -29,3 +29,6 @@ data/qdrant/
 data/*-mem0-history.db
 server.out.log
 server.err.log
+scratch/
+*_progress.txt
+*_error.txt

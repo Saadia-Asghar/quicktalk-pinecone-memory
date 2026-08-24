@@ -125,23 +125,29 @@ class MemoryStore:
         record["extracted_facts"] = [{"text": record["text"]}]
         return {k: v for k, v in record.items() if k != "organization_id"} | {"organization_id": record["organization_id"]}
 
-    def search(self, *, organization_id: str, mobile_no: str, query: str = "conversation history",
+    def search(self, *, organization_id: str, mobile_no: str | None = None, query: str = "conversation history",
                session_id: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
-        mobile = normalize_mobile(mobile_no)
         namespace = _namespace(organization_id)
-        filters: dict[str, Any] = {"mobile_no": {"$eq": mobile}}
+        filters: dict[str, Any] = {}
+        mobile = None
+        if mobile_no:
+            mobile = normalize_mobile(mobile_no)
+            filters["mobile_no"] = {"$eq": mobile}
         if session_id:
             filters["session_id"] = {"$eq": session_id}
+
         if self._index:
             result = self._index.query(
                 namespace=namespace, vector=_embedding(query), top_k=min(limit, 50),
-                include_metadata=True, filter=filters,
+                include_metadata=True, filter=filters or None,
             )
             return [dict(match.metadata or {}) | {"score": match.score} for match in result.matches]
 
         q = _embedding(query)
         with self._local_lock:
-            rows = [r for r in self._read_local() if r.get("namespace") == namespace and r.get("mobile_no") == mobile]
+            rows = [r for r in self._read_local() if r.get("namespace") == namespace]
+            if mobile:
+                rows = [r for r in rows if r.get("mobile_no") == mobile]
         if session_id:
             rows = [r for r in rows if r.get("session_id") == session_id]
         for row in rows:

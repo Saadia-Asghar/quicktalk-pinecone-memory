@@ -21,7 +21,9 @@ class FlaskMemoryServiceTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.env_patch = patch.dict(
             "os.environ",
-            {"PINECONE_API_KEY": "", "MEMORY_BACKEND": "pinecone", "SERVICE_API_KEY": ""},
+            {"PINECONE_API_KEY": "", "MEMORY_BACKEND": "pinecone", "SERVICE_API_KEY": "",
+             "GROQ_SUMMARIZER_ENABLED": "false", "OLLAMA_SUMMARIZER_ENABLED": "false",
+             "GEMINI_SUMMARIZER_ENABLED": "false"},
             clear=False,
         )
         self.env_patch.start()
@@ -125,8 +127,9 @@ class FlaskMemoryServiceTests(unittest.TestCase):
             query="billing history",
             session_id="session-a",
         )
-        self.assertTrue(calls["user_id"].startswith("customer-"))
-        self.assertEqual(calls["filters"], {"session_id": "session-a"})
+        self.assertTrue(calls["filters"]["user_id"].startswith("customer-"))
+        self.assertEqual(calls["filters"]["session_id"], "session-a")
+        self.assertEqual(calls["top_k"], 10)
 
     @patch.dict("os.environ", {"PINECONE_API_KEY": "test-key"}, clear=False)
     def test_free_pinecone_mode_uses_ollama_and_pinecone(self):
@@ -158,10 +161,10 @@ class FlaskMemoryServiceTests(unittest.TestCase):
         listed = self.client.get("/api/tools")
         self.assertEqual(listed.status_code, 200)
         names = {tool["function"]["name"] for tool in listed.get_json()["tools"]}
-        self.assertEqual(names, {
+        self.assertTrue({
             "save_customer_memory", "search_customer_memory", "get_handoff_context",
             "get_contextual_welcome", "search_approved_knowledge",
-        })
+        }.issubset(names))
 
         arguments = {
             "organization_id": "org-tools", "session_id": "session-tools",

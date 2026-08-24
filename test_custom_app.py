@@ -14,7 +14,9 @@ class CustomAppTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.env_patch = patch.dict(
             "os.environ",
-            {"PINECONE_API_KEY": "", "MEMORY_BACKEND": "pinecone", "SERVICE_API_KEY": ""},
+            {"PINECONE_API_KEY": "", "MEMORY_BACKEND": "pinecone", "SERVICE_API_KEY": "",
+             "GROQ_SUMMARIZER_ENABLED": "false", "OLLAMA_SUMMARIZER_ENABLED": "false",
+             "GEMINI_SUMMARIZER_ENABLED": "false"},
             clear=False,
         )
         self.env_patch.start()

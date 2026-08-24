@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>QuickTalk Tool Catalog</title>
+  <style>
+    :root{font-family:Inter,system-ui,sans-serif;color:#10233f;background:#f4f7fb}body{margin:0}.wrap{max-width:1050px;margin:auto;padding:40px 22px}h1{font-size:38px;margin:0 0 8px}.lead{color:#52647c;margin-bottom:26px}.flow,.card,.status{background:#fff;border:1px solid #dce5f0;border-radius:16px;padding:20px;box-shadow:0 5px 18px #17345b0b}.flow{margin-bottom:22px}.flow strong{color:#5546df}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:15px}.card h2{font-size:18px;margin:0 0 8px}.card p{color:#53657d;min-height:42px}.card ul{padding-left:20px;color:#243854}.pill{display:inline-block;padding:5px 9px;border-radius:20px;background:#eeeaff;color:#5546df;font-size:12px;font-weight:700}.status{display:flex;gap:22px;flex-wrap:wrap;margin-bottom:22px}.status div{flex:1;min-width:220px}.bar{height:8px;background:#edf1f6;border-radius:9px;overflow:hidden}.bar i{display:block;height:100%;background:#6557e8}.links{display:flex;gap:12px;margin-top:24px}.links a{color:#fff;background:#10233f;padding:10px 14px;border-radius:9px;text-decoration:none}@media(max-width:600px){h1{font-size:30px}}
+  </style>
+</head>
+<body><main class="wrap">
+  <span class="pill">FLASK TOOL CALLING</span><h1>QuickTalk tools</h1>
+  <p class="lead">Every tool is tenant-scoped. Live answers use a strict two-stage retrieval chain.</p>
+  <section class="flow"><strong>Live answer order:</strong> Bot knowledge base → approved human-agent memories → apology if both sources miss.</section>
+  <section class="status" id="status"><div>Loading import status…</div></section>
+  <section class="grid" id="tools"></section>
+  <nav class="links"><a href="/custom">Open live chat</a><a href="/knowledge">Agent portal</a><a href="/dashboard">Analytics</a></nav>
+</main><script>
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+Promise.all([fetch('/api/public/tool-catalog').then(r=>r.json()),fetch('/api/import-status').then(r=>r.json())]).then(([catalog,imports])=>{
+  document.querySelector('#tools').innerHTML=catalog.tools.map(t=>{const f=t.function,p=f.parameters||{},required=p.required||[];return `<article class="card"><span class="pill">TOOL</span><h2>${esc(f.name)}</h2><p>${esc(f.description)}</p><ul><li><b>Required:</b> ${required.length?required.map(esc).join(', '):'none'}</li><li><b>Returns:</b> structured JSON result</li><li><b>Invoke:</b> POST /api/tools/${esc(f.name)}/invoke</li></ul></article>`}).join('');
+  const label=(name,x)=>{const pct=Math.min(100,Math.round(x.processed/x.total*100));return `<div><b>${name}</b><p>${x.processed.toLocaleString()} / ${x.total.toLocaleString()} (${pct}%)</p><div class="bar"><i style="width:${pct}%"></i></div></div>`};
+  document.querySelector('#status').innerHTML=label('Approved agent knowledge → memory index',imports.agent_knowledge)+label('Legacy customer import',imports.customer_memory)+label('Clean all-organization Groq → Mem0 backfill',imports.all_organization_mem0);
+}).catch(e=>document.querySelector('#tools').textContent='Backend unavailable: '+e.message);
+</script></body></html>

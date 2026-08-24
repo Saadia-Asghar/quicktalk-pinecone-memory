@@ -64,7 +64,7 @@ class Mem0MemoryStore:
                 config = {
                     "llm": {
                         "provider": "openai",
-                        "config": {"model": os.getenv("MEM0_LLM_MODEL", "gpt-4.1-mini")},
+                        "config": {"model": os.getenv("MEM0_LLM_MODEL", "gpt-4o-mini")},
                     },
                     "embedder": {
                         "provider": "openai",
@@ -133,22 +133,19 @@ class Mem0MemoryStore:
             extracted_facts = _extract_mem0_results(res)
             record["extracted_facts"] = extracted_facts
         except Exception as e:
-            print(f"Warning: Mem0 client add failed: {e}")
+            raise RuntimeError(f"Mem0 could not store this memory: {e}") from e
         return record
 
-    def search(self, *, organization_id: str, mobile_no: str, query: str = "conversation history",
+    def search(self, *, organization_id: str, mobile_no: str | None = None, query: str = "conversation history",
                session_id: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
-        mobile = normalize_mobile(mobile_no)
-        customer_id = self._customer_id(organization_id, mobile)
+        customer_id = self._customer_id(organization_id, normalize_mobile(mobile_no)) if mobile_no else None
         filters: dict[str, Any] = {}
+        if customer_id:
+            filters["user_id"] = customer_id
         if session_id:
             filters["session_id"] = session_id
-        response = self._client(organization_id).search(
-            query,
-            user_id=customer_id,
-            filters=filters or None,
-            limit=min(limit, 50),
-        )
+        kwargs = {"filters": filters or None, "top_k": min(limit, 50)}
+        response = self._client(organization_id).search(query, **kwargs)
         results = _extract_mem0_results(response)
         normalized = []
         for item in results:
@@ -162,7 +159,9 @@ class Mem0MemoryStore:
     def recent(self, *, organization_id: str, mobile_no: str, limit: int = 100) -> list[dict[str, Any]]:
         mobile = normalize_mobile(mobile_no)
         cid = self._customer_id(organization_id, mobile)
-        response = self._client(organization_id).get_all(user_id=cid, limit=min(limit, 100))
+        response = self._client(organization_id).get_all(
+            filters={"user_id": cid}, top_k=min(limit, 100)
+        )
         print(f"[DEBUG MEM0 RECENT] cid={cid} response={response}")
         results = _extract_mem0_results(response)
         items = []
@@ -390,8 +389,8 @@ class GroqPineconeMem0MemoryStore(Mem0MemoryStore):
     """Mem0 using Groq's fast LPU inference for extraction and Ollama for embeddings."""
 
     def __init__(self) -> None:
-        if not os.getenv("GROQ_API_KEY"):
-            raise RuntimeError("Groq mode requires GROQ_API_KEY")
+        if not (os.getenv("GROQ_MEMORY_API_KEY") or os.getenv("GROQ_API_KEY")):
+            raise RuntimeError("Groq mode requires GROQ_MEMORY_API_KEY or GROQ_API_KEY")
         if not os.getenv("PINECONE_API_KEY"):
             raise RuntimeError("Groq mode requires PINECONE_API_KEY")
         self._clients: dict[str, Any] = {}
@@ -415,6 +414,7 @@ class GroqPineconeMem0MemoryStore(Mem0MemoryStore):
                     "llm": {
                         "provider": "groq",
                         "config": {
+                            "api_key": os.getenv("GROQ_MEMORY_API_KEY") or os.getenv("GROQ_API_KEY"),
                             "model": os.getenv("MEM0_GROQ_MODEL", "llama-3.3-70b-versatile"),
                             "temperature": 0.1,
                             "max_tokens": 1200,
@@ -469,8 +469,8 @@ class GroqQdrantMem0MemoryStore(Mem0MemoryStore):
     """Mem0 using Groq's fast LPU inference and Qdrant for local vector storage."""
 
     def __init__(self) -> None:
-        if not os.getenv("GROQ_API_KEY"):
-            raise RuntimeError("Groq mode requires GROQ_API_KEY")
+        if not (os.getenv("GROQ_MEMORY_API_KEY") or os.getenv("GROQ_API_KEY")):
+            raise RuntimeError("Groq mode requires GROQ_MEMORY_API_KEY or GROQ_API_KEY")
         self._clients: dict[str, Any] = {}
         self._lock = threading.Lock()
 
@@ -493,6 +493,7 @@ class GroqQdrantMem0MemoryStore(Mem0MemoryStore):
                     "llm": {
                         "provider": "groq",
                         "config": {
+                            "api_key": os.getenv("GROQ_MEMORY_API_KEY") or os.getenv("GROQ_API_KEY"),
                             "model": os.getenv("MEM0_GROQ_MODEL", "llama-3.3-70b-versatile"),
                             "temperature": 0.1,
                             "max_tokens": 1200,

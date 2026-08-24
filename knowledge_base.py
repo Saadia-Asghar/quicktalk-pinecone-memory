@@ -16,6 +16,15 @@ from memory_summarizer import _ollama
 
 
 KNOWLEDGE_MOBILE = "+10000000000"
+PROMPT_DIR = Path(__file__).parent / "prompts"
+NO_APPROVED_ANSWER = (
+    "I apologize, but I could not find an approved answer to your question "
+    "in our human-agent knowledge records."
+)
+NO_KNOWLEDGE_ANSWER = (
+    "I apologize, but I could not find an answer in either our bot knowledge base "
+    "or our approved human-agent knowledge records."
+)
 
 
 def _now() -> str:
@@ -45,6 +54,50 @@ def _tokens(text: str) -> set[str]:
             token = token[:-1]
         result.add(token)
     return result
+
+
+def _prompt(name: str, **values: str) -> str:
+    template = (PROMPT_DIR / name).read_text(encoding="utf-8")
+    for key, value in values.items():
+        template = template.replace("{{" + key + "}}", value)
+    return template
+
+
+_NON_ANSWER_PATTERNS = (
+    r"\b(?:will|shall)\s+(?:assist|contact|call|reply|respond|check)\b",
+    r"\b(?:contact|connect(?:ed)?|transfer(?:red)?|forward(?:ed)?)\s+(?:you\s+)?(?:to|with)\b",
+    r"\b(?:in|by)\s+(?:the\s+)?(?:morning|evening|tomorrow)\b",
+    r"\b(?:please\s+)?(?:wait|hold on|stay connected)\b",
+    r"\bwhat\s+(?:is\s+the\s+)?(?:issue|problem)\b",
+    r"\b(?:not sure|cannot confirm|can't confirm|will confirm)\b",
+)
+
+
+def _is_reusable_pair(question: str, answer: str) -> bool:
+    """Conservative gate: incomplete hand-offs and ambiguous chat are not knowledge."""
+    question, answer = _redact(question), _redact(answer)
+    q_words = re.findall(r"[\w]+", question.casefold(), re.UNICODE)
+    a_words = re.findall(r"[\w]+", answer.casefold(), re.UNICODE)
+    if len(q_words) < 4 or len(a_words) < 5:
+        return False
+    if re.fullmatch(r"[\W_]*(?:ok(?:ay)?|yes|no|hi|hello|urgent|its urgent much)[\W_]*", question, re.I):
+        return False
+    if any(re.search(pattern, answer, re.I) for pattern in _NON_ANSWER_PATTERNS):
+        return False
+    # Deictic replies cannot safely stand alone outside the original conversation.
+    if re.search(r"\b(?:this one|that one|it can|we can change it|same one)\b", answer, re.I):
+        return False
+    combined = f"{question} {answer}"
+    if re.search(r"\b(?:price|fee|charges?|cost|pkr|rs\.?|usd)\b", combined, re.I):
+        has_currency = bool(re.search(r"\b(?:pkr|rs\.?|usd)\s*\d|\d\s*(?:pkr|rs\.?|usd)\b", answer, re.I))
+        has_scope = bool(re.search(r"\b(?:package|plan|mbps|consultation|appointment|service|installation)\b", combined, re.I))
+        has_validity = bool(re.search(r"\b(?:effective|valid|current(?:ly)?|as of|from)\b|\b(?:20\d{2})\b", answer, re.I))
+        if not (has_currency and has_scope and has_validity):
+            return False
+    if re.search(r"\b(?:policy|regulation|rule)\b", combined, re.I):
+        if not re.search(r"\b(?:effective|valid|current(?:ly)?|as of|from|version)\b|\b(?:20\d{2})\b", answer, re.I):
+            return False
+    return True
 
 
 class KnowledgeRepository:
@@ -100,6 +153,15 @@ class KnowledgeRepository:
                     action TEXT NOT NULL, actor_id TEXT NOT NULL,
                     previous_value TEXT, new_value TEXT, created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS bot_knowledge_articles (
+                    id TEXT PRIMARY KEY, organization_scope TEXT NOT NULL,
+                    question TEXT NOT NULL, answer TEXT NOT NULL,
+                    status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS knowledge_curation_policies (
+                    organization_scope TEXT PRIMARY KEY, rules_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 CREATE INDEX IF NOT EXISTS idx_agent_sessions_org_status
                     ON agent_sessions(organization_scope, status, closed_at);
                 CREATE INDEX IF NOT EXISTS idx_agent_messages_session_time
@@ -108,6 +170,8 @@ class KnowledgeRepository:
                     ON knowledge_articles(organization_scope, status, canonical_topic);
                 CREATE INDEX IF NOT EXISTS idx_versions_article_status
                     ON knowledge_article_versions(article_id, status, version DESC);
+                CREATE INDEX IF NOT EXISTS idx_bot_knowledge_org_status
+                    ON bot_knowledge_articles(organization_scope, status, updated_at DESC);
                 """
             )
 
@@ -156,9 +220,11 @@ class KnowledgeRepository:
     def list_sessions(self, organization_scope: str, limit: int = 100) -> list[dict[str, Any]]:
         with self._connect() as db:
             rows = db.execute(
-                """SELECT s.*, COUNT(m.id) AS message_count FROM agent_sessions s
-                LEFT JOIN agent_messages m ON m.session_id=s.id
-                WHERE s.organization_scope=? GROUP BY s.id
+                """SELECT s.*, (
+                    SELECT COUNT(*) FROM agent_messages m
+                    WHERE m.organization_scope=s.organization_scope AND m.session_id=s.id
+                ) AS message_count
+                FROM agent_sessions s WHERE s.organization_scope=?
                 ORDER BY COALESCE(s.closed_at,s.started_at) DESC LIMIT ?""",
                 (organization_scope, min(max(limit, 1), 500)),
             ).fetchall()
@@ -174,40 +240,123 @@ class KnowledgeRepository:
         agents = [m for m in messages if m["sender_role"] == "agent"]
         if not customers or not agents:
             raise ValueError("a completed chat requires customer and human-agent messages")
-        question, answer = self._extract_reusable(messages)
+        reusable = self._extract_reusable(organization_scope, messages)
         now = _now()
         with self._connect() as db:
             db.execute(
                 "UPDATE agent_sessions SET status='closed',resolution_status='resolved',closed_at=? WHERE id=? AND organization_scope=?",
                 (now, session_id, organization_scope),
             )
-        article = self.upsert_article(
-            organization_scope, question, answer, actor="application:auto-agent-chat",
-            source_session_id=session_id,
-        )
-        return {"session": self.get_session(organization_scope, session_id), "article": article, "idempotent": False}
+        article = None
+        if reusable:
+            question, answer = reusable
+            article = self.upsert_article(
+                organization_scope, question, answer, actor="application:auto-agent-chat",
+                source_session_id=session_id,
+            )
+        return {"session": self.get_session(organization_scope, session_id), "article": article,
+                "reusable": bool(article),
+                "rejection_reason": None if article else
+                "No complete, standalone, generalizable human-agent answer passed the organization policy.",
+                "idempotent": False}
 
-    @staticmethod
-    def _extract_reusable(messages: list[dict[str, Any]]) -> tuple[str, str]:
+    def curation_policy(self, organization_scope: str) -> dict[str, Any]:
+        default = {
+            "scope": organization_scope,
+            "save": [
+                "complete generally applicable factual answers",
+                "resolved procedures with the required steps or conditions",
+                "standalone questions and answers that remain clear outside the source chat",
+            ],
+            "reject": [
+                "greetings, acknowledgements, urgency, filler, and clarification questions",
+                "transfers, referrals, promises to answer later, and unresolved responses",
+                "ambiguous replies, missing requested details, customer-specific facts, and identifiers",
+                "opinions, guesses, unsafe claims, or content that cannot be generalized",
+            ],
+            "controlled_facts": {
+                "prices_and_fees": "save only with currency, applicable product/service and effective/current period",
+                "regulations_and_policies": "save only with clear organization scope, rule conditions and version/effective context",
+                "service_rules": "save when complete, customer-general and not tied to one account or transaction",
+            },
+        }
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT rules_json FROM knowledge_curation_policies WHERE organization_scope=?",
+                (organization_scope,),
+            ).fetchone()
+        if row:
+            try:
+                custom = json.loads(row["rules_json"])
+                if isinstance(custom, dict):
+                    default.update(custom)
+            except json.JSONDecodeError:
+                pass
+        return default
+
+    def set_curation_policy(self, organization_scope: str, policy: dict[str, Any]) -> dict[str, Any]:
+        allowed = {key: policy[key] for key in ("save", "reject", "controlled_facts") if key in policy}
+        if not allowed:
+            raise ValueError("policy must include save, reject, or controlled_facts")
+        if "save" in allowed and not isinstance(allowed["save"], list):
+            raise ValueError("save rules must be a list")
+        if "reject" in allowed and not isinstance(allowed["reject"], list):
+            raise ValueError("reject rules must be a list")
+        if "controlled_facts" in allowed and not isinstance(allowed["controlled_facts"], dict):
+            raise ValueError("controlled_facts must be an object")
+        with self._connect() as db:
+            db.execute(
+                "INSERT INTO knowledge_curation_policies(organization_scope,rules_json,updated_at) VALUES(?,?,?) "
+                "ON CONFLICT(organization_scope) DO UPDATE SET rules_json=excluded.rules_json,updated_at=excluded.updated_at",
+                (organization_scope, json.dumps(allowed, ensure_ascii=False), _now()),
+            )
+        return self.curation_policy(organization_scope)
+
+    def tone_profile(self, organization_scope: str, limit: int = 500) -> dict[str, Any]:
+        """Derive style-only guidance; message facts are deliberately excluded."""
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT text FROM agent_messages WHERE organization_scope=? AND sender_role='agent' "
+                "ORDER BY created_at DESC LIMIT ?", (organization_scope, min(max(limit, 1), 2000)),
+            ).fetchall()
+        texts = [str(row["text"]).strip() for row in rows if str(row["text"]).strip()]
+        if not texts:
+            return {"organization_id": organization_scope, "sample_count": 0,
+                    "style_guidance": "Use a concise, polite, clear support tone.", "facts_learned": False}
+        average_words = round(sum(len(text.split()) for text in texts) / len(texts), 1)
+        roman_urdu = sum(bool(re.search(r"\b(?:ap|aap|ha|hai|abhi|kr|kar|sir|g)\b", text, re.I)) for text in texts)
+        polite = sum(bool(re.search(r"\b(?:please|thank|thanks|sir|madam|kindly)\b", text, re.I)) for text in texts)
+        language = "concise English with natural Roman Urdu when the customer uses it" if roman_urdu / len(texts) >= .1 else "clear conversational English"
+        courtesy = "Use a polite acknowledgement." if polite / len(texts) >= .1 else "Be friendly without unnecessary formality."
+        return {
+            "organization_id": organization_scope, "sample_count": len(texts),
+            "style_guidance": f"Use {language}. {courtesy} Keep most replies near {max(6, round(average_words))} words, unless steps require detail.",
+            "facts_learned": False,
+            "safety_rule": "Learn wording style only; never copy customer data, factual claims, promises, errors, or identifiers from tone samples.",
+        }
+
+    def _extract_reusable(self, organization_scope: str, messages: list[dict[str, Any]]) -> tuple[str, str] | None:
         transcript = "\n".join(f"{m['sender_role'].title()}: {_redact(m['text'])}" for m in messages)
-        prompt = (
-            "Extract one reusable support question and its human-agent answer from this completed chat. "
-            "Remove customer-specific identifiers. Return JSON only: "
-            '{"question":"...","answer":"...","reusable":true}. '
-            "Do not invent information.\n\n" + transcript
-        )
-        generated = _ollama(prompt)
+        policy = self.curation_policy(organization_scope)
+        prompt = _prompt("knowledge_curator.txt", organization_policy=json.dumps(policy, ensure_ascii=False),
+                         transcript=transcript)
+        generated = _ollama(prompt, workload="knowledge")
         if generated:
             try:
                 match = re.search(r"\{.*\}", generated, re.DOTALL)
                 payload = json.loads(match.group(0) if match else generated)
                 if payload.get("reusable") and payload.get("question") and payload.get("answer"):
-                    return _redact(str(payload["question"])), _redact(str(payload["answer"]))
+                    pair = _redact(str(payload["question"])), _redact(str(payload["answer"]))
+                    return pair if _is_reusable_pair(*pair) else None
+                return None
             except (ValueError, TypeError, json.JSONDecodeError):
                 pass
-        question = next(_redact(m["text"]) for m in messages if m["sender_role"] == "customer")
-        answer = next(_redact(m["text"]) for m in reversed(messages) if m["sender_role"] == "agent")
-        return question, answer
+        # Offline fallback remains conservative and accepts only a standalone-looking pair.
+        questions = [_redact(m["text"]) for m in messages if m["sender_role"] == "customer"]
+        answers = [_redact(m["text"]) for m in messages if m["sender_role"] == "agent"]
+        question = max(questions, key=lambda value: len(_tokens(value)))
+        answer = max(answers, key=lambda value: len(_tokens(value)))
+        return (question, answer) if _is_reusable_pair(question, answer) else None
 
     def upsert_article(self, organization_scope: str, question: str, answer: str, *, actor: str,
                        source_session_id: str | None = None) -> dict[str, Any]:
@@ -271,7 +420,8 @@ class KnowledgeRepository:
         where = "a.organization_scope=?" if include_inactive else "a.organization_scope=? AND a.status='active'"
         with self._connect() as db:
             rows = db.execute(
-                f"""SELECT a.*,v.canonical_question,v.answer,v.approved_by,v.approved_at
+                f"""SELECT a.*,v.canonical_question,v.answer,v.approved_by,v.approved_at,
+                v.source_session_id
                 FROM knowledge_articles a JOIN knowledge_article_versions v
                 ON v.article_id=a.id AND v.version=a.active_version WHERE {where}
                 ORDER BY a.updated_at DESC""", (organization_scope,),
@@ -299,6 +449,34 @@ class KnowledgeRepository:
             tokens = _tokens(article["canonical_question"] + " " + article["answer"])
             article["score"] = len(query_tokens & tokens) / max(len(query_tokens), 1)
         return sorted(articles, key=lambda row: row["score"], reverse=True)[:limit]
+
+    def upsert_bot_article(self, organization_scope: str, question: str, answer: str) -> dict[str, Any]:
+        if not question.strip() or not answer.strip():
+            raise ValueError("question and answer are required")
+        article_id, now = str(uuid.uuid4()), _now()
+        with self._connect() as db:
+            db.execute("INSERT INTO bot_knowledge_articles VALUES (?,?,?,?,?,?,?)", (
+                article_id, organization_scope, _redact(question), _redact(answer), "active", now, now,
+            ))
+        return {"id": article_id, "organization_scope": organization_scope,
+                "question": _redact(question), "answer": _redact(answer), "status": "active"}
+
+    def list_bot_articles(self, organization_scope: str) -> list[dict[str, Any]]:
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT * FROM bot_knowledge_articles WHERE organization_scope=? AND status='active' ORDER BY updated_at DESC",
+                (organization_scope,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def search_bot_articles(self, organization_scope: str, query: str, limit: int = 5) -> list[dict[str, Any]]:
+        query_tokens = _tokens(query)
+        rows = self.list_bot_articles(organization_scope)
+        for row in rows:
+            tokens = _tokens(row["question"] + " " + row["answer"])
+            row["score"] = len(query_tokens & tokens) / max(len(query_tokens), 1)
+        return [row for row in sorted(rows, key=lambda item: item["score"], reverse=True)[:limit]
+                if row["score"] >= 0.40]
 
 
 class KnowledgeService:
@@ -331,12 +509,19 @@ class KnowledgeService:
                                    "article_version": article["active_version"], "status": "active"},
         )
 
+    def apply_tone(self, organization_scope: str, answer: str) -> tuple[str, dict[str, Any]]:
+        profile = self.repository.tone_profile(organization_scope)
+        prompt = _prompt("tone_response.txt", style_guidance=profile["style_guidance"], response=answer)
+        styled = _ollama(prompt, workload="knowledge", timeout=2.0, max_retries=1) or answer
+        return styled.strip(), profile
+
     def search(self, organization_scope: str, query: str, limit: int = 5) -> dict[str, Any]:
         matches = self.memory_store.search(
             organization_id=organization_scope, mobile_no=KNOWLEDGE_MOBILE,
             query=query, limit=min(max(limit, 1), 20),
         )
         verified = []
+        query_tokens = _tokens(query)
         for match in matches:
             article_id = match.get("article_id")
             if not article_id:
@@ -348,19 +533,51 @@ class KnowledgeService:
             if article["status"] != "active" or int(match.get("article_version", 0)) != int(article["active_version"]):
                 continue
             article["score"] = float(match.get("score", 0))
-            if article["score"] >= 0.35:
+            article_tokens = _tokens(article["canonical_question"] + " " + article["answer"])
+            shared = len(query_tokens & article_tokens)
+            required_shared = 1 if len(query_tokens) <= 3 else 2
+            overlap = shared / max(len(query_tokens), 1)
+            if article["score"] >= 0.55 and shared >= required_shared and overlap >= 0.40:
                 verified.append(article)
         if not verified:
-            verified = [row for row in self.repository.lexical_search(organization_scope, query, limit) if row["score"] >= 0.30]
+            verified = [row for row in self.repository.lexical_search(organization_scope, query, limit) if row["score"] >= 0.40]
         if not verified:
-            return {"status": "no_evidence", "answer": None, "items": []}
+            return {
+                "status": "no_evidence",
+                "answer": NO_APPROVED_ANSWER,
+                "items": [],
+                "grounded": False,
+                "answer_source": "approved_agent_knowledge",
+                "searched_sources": ["active_approved_agent_articles"],
+            }
         best = verified[0]
-        prompt = (
-            "Answer the customer using only this approved organization knowledge. "
-            "Do not add facts. If it does not answer the question, say no approved answer was found.\n"
-            f"Question: {query}\nApproved knowledge: {best['answer']}\nAnswer:"
-        )
-        answer = _ollama(prompt) or best["answer"]
-        return {"status": "answer_found", "answer": answer.strip(), "items": verified,
+        return {"status": "answer_found", "answer": best["answer"].strip(), "items": verified,
                 "article_id": best["id"], "article_version": best["active_version"],
-                "answer_source": "approved_agent_knowledge"}
+                "answer_source": "approved_agent_knowledge", "grounded": True,
+                "searched_sources": ["active_approved_agent_articles"]}
+
+    def search_bot(self, organization_scope: str, query: str, limit: int = 5) -> dict[str, Any]:
+        matches = self.repository.search_bot_articles(organization_scope, query, limit)
+        if not matches:
+            return {"status": "no_evidence", "answer": None, "items": [], "grounded": False,
+                    "answer_source": "bot_knowledge_base", "searched_sources": ["bot_knowledge_base"]}
+        best = matches[0]
+        return {"status": "answer_found", "answer": best["answer"].strip(),
+                "items": matches, "grounded": True, "answer_source": "bot_knowledge_base",
+                "searched_sources": ["bot_knowledge_base"]}
+
+    def resolve(self, organization_scope: str, query: str, limit: int = 5) -> dict[str, Any]:
+        primary = self.search_bot(organization_scope, query, limit)
+        if primary["grounded"]:
+            primary["fallback_used"] = False
+            result = primary
+        else:
+            agent = self.search(organization_scope, query, limit)
+            agent["fallback_used"] = True
+            agent["searched_sources"] = ["bot_knowledge_base", "active_approved_agent_articles"]
+            if not agent["grounded"]:
+                agent["answer"] = NO_KNOWLEDGE_ANSWER
+            result = agent
+        result["answer"], result["tone_profile"] = self.apply_tone(organization_scope, result["answer"])
+        result["tone_applied"] = True
+        return result

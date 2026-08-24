@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import hmac
 import threading
+from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory
 from dotenv import load_dotenv
@@ -31,7 +32,7 @@ def create_app(store: MemoryStore | None = None, analytics_repository=None) -> F
     def authenticate():
         expected = os.getenv("SERVICE_API_KEY")
         if not expected or request.endpoint in {
-            "index", "health", "static", "context_card", "inbox_welcome", "analytics_dashboard", "customer_profile", "list_demo_users", "session_messages", "custom_inbox_route", "dashboard_route", "knowledge_route"
+            "index", "health", "static", "context_card", "inbox_welcome", "analytics_dashboard", "customer_profile", "list_demo_users", "session_messages", "custom_inbox_route", "dashboard_route", "knowledge_route", "tools_route", "public_tool_catalog", "import_status"
         }:
             return None
         supplied = request.headers.get("X-API-Key", "")
@@ -65,6 +66,10 @@ def create_app(store: MemoryStore | None = None, analytics_repository=None) -> F
     def knowledge_route():
         return send_from_directory(app.static_folder, "knowledge_portal.html")
 
+    @app.get("/tools")
+    def tools_route():
+        return send_from_directory(app.static_folder, "tools_catalog.html")
+
     def request_scope(body=None) -> str:
         body = body or {}
         supplied = str(body.get("organization_id") or request.args.get("organization_id") or "").strip()
@@ -93,6 +98,24 @@ def create_app(store: MemoryStore | None = None, analytics_repository=None) -> F
     @app.get("/api/tools")
     def list_tools():
         return jsonify({"tools": TOOL_DEFINITIONS})
+
+    @app.get("/api/public/tool-catalog")
+    def public_tool_catalog():
+        return jsonify({"tools": TOOL_DEFINITIONS})
+
+    @app.get("/api/import-status")
+    def import_status():
+        root = Path(__file__).resolve().parent
+        def progress(name: str) -> int:
+            try:
+                return int((root / name).read_text(encoding="utf-8").strip())
+            except (OSError, ValueError):
+                return 0
+        return jsonify({
+            "agent_knowledge": {"processed": progress("knowledge_import_progress.txt"), "total": 16588},
+            "customer_memory": {"processed": progress("import_progress.txt"), "total": 16588},
+            "all_organization_mem0": {"processed": progress("mem0_all_org_progress.txt"), "total": 16588},
+        })
 
     @app.post("/api/tools/<tool_name>/invoke")
     def invoke_tool(tool_name: str):
@@ -211,6 +234,17 @@ def create_app(store: MemoryStore | None = None, analytics_repository=None) -> F
         scope = request_scope()
         return jsonify({"sessions": knowledge_repository.list_sessions(scope)})
 
+    @app.get("/api/agent-chats/<session_id>/messages")
+    def get_agent_chat_messages(session_id: str):
+        scope = request_scope()
+        session = knowledge_repository.get_session(scope, session_id)
+        article = knowledge_repository.article_for_source(scope, session_id)
+        return jsonify({
+            "session": session,
+            "messages": knowledge_repository.session_messages(scope, session_id),
+            "generated_memory": article,
+        })
+
     @app.post("/api/agent-chats")
     def create_agent_chat():
         body = request.get_json(force=True)
@@ -242,6 +276,33 @@ def create_app(store: MemoryStore | None = None, analytics_repository=None) -> F
     def list_knowledge_articles():
         scope = request_scope()
         return jsonify({"articles": knowledge_repository.list_articles(scope)})
+
+    @app.put("/api/knowledge/policy")
+    def update_knowledge_policy():
+        body = request.get_json(force=True)
+        scope = request_scope(body)
+        require_role("organization_admin")
+        policy = body.get("policy")
+        if not isinstance(policy, dict):
+            raise BadRequest("policy must be an object")
+        return jsonify(knowledge_repository.set_curation_policy(scope, policy))
+
+    @app.get("/api/bot-knowledge/articles")
+    def list_bot_knowledge_articles():
+        scope = request.args.get("organization_id", "").strip()
+        if not scope:
+            raise BadRequest("organization_id is required")
+        return jsonify({"articles": knowledge_repository.list_bot_articles(scope)})
+
+    @app.post("/api/bot-knowledge/articles")
+    def create_bot_knowledge_article():
+        payload = request.get_json(silent=True) or {}
+        scope = str(payload.get("organization_id", "")).strip()
+        if not scope:
+            raise BadRequest("organization_id is required")
+        return jsonify(knowledge_repository.upsert_bot_article(
+            scope, str(payload.get("question", "")), str(payload.get("answer", "")),
+        )), 201
 
     @app.patch("/api/knowledge/articles/<article_id>")
     def edit_knowledge_article(article_id: str):

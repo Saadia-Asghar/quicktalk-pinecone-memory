@@ -53,6 +53,66 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "get_organization_tone_profile",
+            "description": "Return organization-scoped style-only guidance learned from human-agent chats. It never returns chat facts as knowledge.",
+            "parameters": {
+                "type": "object",
+                "properties": {"organization_id": {"type": "string"}},
+                "required": ["organization_id"], "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_knowledge_curation_policy",
+            "description": "Return the tenant-scoped rules controlling which human-agent answers may be saved as reusable Mem0 knowledge.",
+            "parameters": {
+                "type": "object",
+                "properties": {"organization_id": {"type": "string"}},
+                "required": ["organization_id"], "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "resolve_support_answer",
+            "description": "Search bot knowledge first, then approved human-agent knowledge; apologize only if both miss.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "organization_id": {"type": "string"},
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 20},
+                    "session_id": {"type": "string"},
+                    "mobile_no": {"type": "string"},
+                },
+                "required": ["organization_id", "query"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_missing_knowledge_topics",
+            "description": "List tenant-scoped topics the bot could not answer after searching both knowledge sources.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "organization_id": {"type": "string"},
+                    "days": {"type": "integer", "minimum": 1, "maximum": 365},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                },
+                "required": ["organization_id"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "search_approved_knowledge",
             "description": "Search the organization's active, auto-approved human-agent knowledge and generate a grounded answer.",
             "parameters": {
@@ -174,17 +234,77 @@ class ToolRegistry:
             )
             result = {"items": items, "count": len(items), "retrieval": "mem0-semantic"}
             if arguments.get("generate_answer"):
+                answer = answer_from_memories(str(arguments["query"]), items)
+                if self.knowledge:
+                    answer, tone = self.knowledge.apply_tone(str(arguments["organization_id"]), answer)
+                    result["tone_profile"] = tone
+                    result["tone_applied"] = True
+                result["answer"] = answer
+                result["grounded"] = bool(items)
+            return result
+        if name == "search_organization_memory":
+            self._require(arguments, "organization_id", "query")
+            limit = self._limit(arguments.get("limit", 15))
+            items = self.store.search(
+                organization_id=arguments["organization_id"],
+                mobile_no=None,
+                query=arguments["query"],
+                limit=limit,
+            )
+            result = {"items": items, "count": len(items), "retrieval": "mem0-org-wide"}
+            if arguments.get("generate_answer"):
                 result["answer"] = answer_from_memories(str(arguments["query"]), items)
                 result["grounded"] = bool(items)
             return result
         if name == "search_approved_knowledge":
             self._require(arguments, "organization_id", "query")
             if not self.knowledge:
-                return {"status": "no_evidence", "answer": None, "items": []}
+                return {
+                    "status": "no_evidence",
+                    "answer": "I apologize, but approved human-agent knowledge is currently unavailable.",
+                    "items": [], "grounded": False,
+                    "answer_source": "approved_agent_knowledge",
+                }
             return self.knowledge.search(
                 str(arguments["organization_id"]), str(arguments["query"]),
                 self._limit(arguments.get("limit", 5)),
             )
+        if name == "get_organization_tone_profile":
+            self._require(arguments, "organization_id")
+            if not self.knowledge:
+                raise ValueError("knowledge service is unavailable")
+            return self.knowledge.repository.tone_profile(str(arguments["organization_id"]))
+        if name == "get_knowledge_curation_policy":
+            self._require(arguments, "organization_id")
+            if not self.knowledge:
+                raise ValueError("knowledge service is unavailable")
+            return self.knowledge.repository.curation_policy(str(arguments["organization_id"]))
+        if name == "resolve_support_answer":
+            self._require(arguments, "organization_id", "query")
+            if not self.knowledge:
+                return {"status": "no_evidence", "grounded": False,
+                        "answer": "I apologize, but the knowledge service is currently unavailable.",
+                        "searched_sources": ["bot_knowledge_base", "active_approved_agent_articles"]}
+            result = self.knowledge.resolve(
+                str(arguments["organization_id"]), str(arguments["query"]),
+                self._limit(arguments.get("limit", 5)),
+            )
+            if not result.get("grounded") and self.analytics:
+                result["knowledge_gap_event"] = self.analytics.record_live_knowledge_gap(
+                    str(arguments["organization_id"]), str(arguments["query"]),
+                    arguments.get("session_id"), arguments.get("mobile_no"),
+                )
+            return result
+        if name == "get_missing_knowledge_topics":
+            self._require(arguments, "organization_id")
+            if not self.analytics:
+                return {"topics": [], "count": 0}
+            topics = self.analytics.missing_knowledge_topics(
+                str(arguments["organization_id"]), int(arguments.get("days", 30)),
+                int(arguments.get("limit", 20)),
+            )
+            return {"topics": topics, "count": len(topics),
+                    "source": "live_unanswered_queries", "llm_used": False}
         if name == "get_handoff_context":
             self._require(arguments, "organization_id", "mobile_no")
             org_id = arguments["organization_id"]
@@ -230,6 +350,25 @@ class ToolRegistry:
                 "profile_summary": "No precomputed profile repository is configured.",
                 "session_summaries": [],
             }
+        if name == "get_customer_memory_context":
+            self._require(arguments, "organization_id", "mobile_no")
+            organization_id = str(arguments["organization_id"])
+            mobile_no = str(arguments["mobile_no"])
+            if self.analytics:
+                profile = self.analytics.get_profile(organization_id, mobile_no, session_limit=5)
+                return {
+                    "organization_id": organization_id,
+                    "mobile_no": mobile_no,
+                    "memory_count": profile.get("memory_count", 0),
+                    "previous_session_count": profile.get("previous_session_count", 0),
+                    "current_issue": profile.get("current_issue"),
+                    "session_summaries": profile.get("session_summaries", []),
+                    "source": "tenant-scoped-precomputed-profile-and-memory",
+                }
+            memories = self.store.recent(organization_id=organization_id, mobile_no=mobile_no)
+            return {"organization_id": organization_id, "mobile_no": mobile_no,
+                    "memory_count": len(memories), "memories": memories,
+                    "source": "tenant-scoped-memory"}
         if name == "get_contextual_welcome":
             self._require(arguments, "organization_id", "mobile_no")
             org_id = arguments["organization_id"]
@@ -243,12 +382,24 @@ class ToolRegistry:
                         short = issue_match.group(1).strip().rstrip(".!?")[:100] if issue_match else summary_text.strip().rstrip(".!?")[:100]
                     else:
                         short = profile.get("current_issue", "").strip().rstrip(".!?")[:100]
+                    welcome = f'Welcome back! During our last session, we were discussing "{short}". '
+                    welcome += "Has that been fully resolved, or do you need further assistance with it today?"
+                    tone = None
+                    if self.knowledge:
+                        welcome, tone = self.knowledge.apply_tone(org_id, welcome)
                     return {
                         "organization_id": org_id, "mobile_no": mobile,
-                        "welcome_message": f'Welcome back! During our last session, we were discussing "{short}". '
-                                            "Has that been fully resolved, or do you need further assistance with it today?",
+                        "welcome_message": welcome,
                         "memory_count": profile["memory_count"], "source": "precomputed-profile",
+                        "tone_applied": bool(tone), "tone_profile": tone,
                     }
+                welcome, tone = "Hello! How can I help you today?", None
+                if self.knowledge:
+                    welcome, tone = self.knowledge.apply_tone(org_id, welcome)
+                return {"organization_id": org_id, "mobile_no": mobile,
+                        "welcome_message": welcome, "memory_count": 0,
+                        "source": "default-no-profile", "tone_applied": bool(tone),
+                        "tone_profile": tone}
             # fall back to raw Mem0 traversal only if analytics has nothing
             memories = []
             try:
@@ -258,14 +409,22 @@ class ToolRegistry:
             except Exception as e:
                 print(f"Warning: Mem0 welcome query failed or timed out: {e}")
             if memories:
+                welcome = contextual_welcome(memories)
+                tone = None
+                if self.knowledge:
+                    welcome, tone = self.knowledge.apply_tone(org_id, welcome)
                 return {
                     "organization_id": org_id, "mobile_no": mobile,
-                    "welcome_message": contextual_welcome(memories),
+                    "welcome_message": welcome,
                     "memory_count": len(memories), "source": "mem0-vector-store",
+                    "tone_applied": bool(tone), "tone_profile": tone,
                 }
+            welcome, tone = "Hello! How can I help you today?", None
+            if self.knowledge:
+                welcome, tone = self.knowledge.apply_tone(org_id, welcome)
             return {"organization_id": org_id, "mobile_no": mobile,
-                    "welcome_message": "Hello! How can I help you today?",
-                    "memory_count": 0, "source": "default"}
+                    "welcome_message": welcome, "memory_count": 0, "source": "default",
+                    "tone_applied": bool(tone), "tone_profile": tone}
         raise KeyError(name)
 
     @staticmethod

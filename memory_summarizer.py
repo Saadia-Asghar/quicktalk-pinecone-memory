@@ -84,6 +84,11 @@ def answer_from_memories(query: str, memories: list[dict[str, Any]]) -> str:
     if not useful:
         return "I could not find that information in your previous conversations."
 
+    # Real-time recall must not block behind external LLM retries. The retrieved
+    # memory is already a Groq-generated, tenant-scoped summary.
+    if os.getenv("LIVE_MEMORY_LLM_ENABLED", "false").lower() != "true":
+        return f"From your previous conversation: {useful[0]['text']}"
+
     context = "\n".join(
         f"[{item['timestamp']}] [{item['session_id']}] {item['role']}: {item['text']}"
         for item in useful[:10]
@@ -146,9 +151,15 @@ def _summarize_session(session_id: str, items: list[dict[str, Any]]) -> dict[str
     }
 
 
-def _ollama(prompt: str) -> str | None:
+def _ollama(prompt: str, *, workload: str = "summary", timeout: float = 10.0,
+            max_retries: int = 5) -> str | None:
     # 1. Groq API Routing (Free-Tier Developer Plan)
-    groq_key = os.getenv("GROQ_API_KEY")
+    workload_key = {
+        "knowledge": "GROQ_KNOWLEDGE_API_KEY",
+        "memory": "GROQ_MEMORY_API_KEY",
+        "summary": "GROQ_SUMMARY_API_KEY",
+    }.get(workload, "GROQ_SUMMARY_API_KEY")
+    groq_key = os.getenv(workload_key) or os.getenv("GROQ_API_KEY")
     if groq_key and os.getenv("GROQ_SUMMARIZER_ENABLED", "false").lower() == "true":
         url = "https://api.groq.com/openai/v1/chat/completions"
         payload = json.dumps({
@@ -167,10 +178,9 @@ def _ollama(prompt: str) -> str | None:
             },
             method="POST",
         )
-        max_retries = 5
         for attempt in range(max_retries):
             try:
-                with urllib.request.urlopen(request, timeout=10.0) as response:
+                with urllib.request.urlopen(request, timeout=timeout) as response:
                     result = json.loads(response.read().decode("utf-8"))
                 choices = result.get("choices", [])
                 if choices:

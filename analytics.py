@@ -9,6 +9,7 @@ import hashlib
 import json
 import threading
 import time
+import uuid
 from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -207,6 +208,11 @@ class AnalyticsRepository:
                     updated_at TEXT NOT NULL,
                     FOREIGN KEY (organization_scope) REFERENCES organizations(organization_scope)
                 );
+                CREATE TABLE IF NOT EXISTS knowledge_gap_events (
+                    id TEXT PRIMARY KEY, organization_scope TEXT NOT NULL,
+                    session_id TEXT, mobile_no TEXT, question TEXT NOT NULL,
+                    topic TEXT NOT NULL, reason TEXT NOT NULL, created_at TEXT NOT NULL
+                );
                 CREATE INDEX IF NOT EXISTS idx_events_org_time
                     ON memory_events(organization_scope, timestamp);
                 CREATE INDEX IF NOT EXISTS idx_events_org_session
@@ -225,6 +231,8 @@ class AnalyticsRepository:
                     ON durable_facts(organization_scope, mobile_no);
                 CREATE INDEX IF NOT EXISTS idx_durable_facts_entity
                     ON durable_facts(entity_key, entity_value);
+                CREATE INDEX IF NOT EXISTS idx_gap_events_org_time
+                    ON knowledge_gap_events(organization_scope, created_at DESC);
                 """
             )
             columns = {row[1] for row in db.execute("PRAGMA table_info(session_summaries)")}
@@ -240,6 +248,38 @@ class AnalyticsRepository:
                 if column not in columns:
                     db.execute(statement)
             db.execute("CREATE INDEX IF NOT EXISTS idx_sessions_org_gap_time ON session_summaries(organization_scope, knowledge_gap, ended_at DESC)")
+
+    def record_live_knowledge_gap(self, organization_scope: str, question: str,
+                                  session_id: str | None = None,
+                                  mobile_no: str | None = None) -> dict[str, Any]:
+        with self._connect() as db:
+            org = db.execute(
+                "SELECT industry FROM organizations WHERE organization_scope=?", (organization_scope,)
+            ).fetchone()
+            topic = classify_category(question, org["industry"] if org else "generic")
+            created_at = datetime.now(timezone.utc).isoformat()
+            event_id = str(uuid.uuid4())
+            db.execute(
+                "INSERT INTO knowledge_gap_events VALUES (?,?,?,?,?,?,?,?)",
+                (event_id, organization_scope, session_id, mobile_no, question[:500], topic,
+                 "No answer in bot knowledge or approved agent knowledge", created_at),
+            )
+        return {"id": event_id, "organization_id": organization_scope, "question": question[:500],
+                "topic": topic, "created_at": created_at}
+
+    def missing_knowledge_topics(self, organization_scope: str, days: int = 30,
+                                 limit: int = 20) -> list[dict[str, Any]]:
+        since = (datetime.now(timezone.utc) - timedelta(days=min(max(days, 1), 365))).isoformat()
+        with self._connect() as db:
+            rows = db.execute(
+                """SELECT topic, COUNT(*) AS count, COUNT(DISTINCT mobile_no) AS customers,
+                MAX(created_at) AS latest_at, MIN(question) AS example_question,
+                MIN(reason) AS reason FROM knowledge_gap_events
+                WHERE organization_scope=? AND created_at>=? GROUP BY topic
+                ORDER BY count DESC, latest_at DESC LIMIT ?""",
+                (organization_scope, since, min(max(limit, 1), 100)),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def register_organization(
         self, *, scope: str, tenant_id: str, organization_id: str,
@@ -502,7 +542,7 @@ class AnalyticsRepository:
         else:
             current_issue = extract_core_issue(recent_events, self._industry(scope))
             latest_action = next(
-                (event["text"] for event in reversed(latest_events) if event["role"] == "assistant"),
+                (event["text"] for event in reversed(latest_events) if _is_assistant_event(event)),
                 "No previous support action is recorded.",
             )
 
@@ -570,8 +610,8 @@ class AnalyticsRepository:
     ) -> dict[str, Any]:
         if not events: return {"organization_scope": scope, "mobile_no": mobile_no, "session_id": "unknown", "started_at": "", "ended_at": "", "message_count": 0, "category": "Other", "resolution_status": "not_recorded", "summary": "No events recorded.", "summary_source": "fallback", "knowledge_gap": False, "knowledge_gap_topic": None, "knowledge_gap_reason": None, "knowledge_gap_question": None, "knowledge_gap_type": None}
         events = deduplicate_session_events(events)
-        customer_events = [event for event in events if event["role"] != "assistant"]
-        assistant_events = [event for event in events if event["role"] == "assistant"]
+        customer_events = [event for event in events if not _is_assistant_event(event)]
+        assistant_events = [event for event in events if _is_assistant_event(event)]
         
         # Check for explicit resolution status or transaction confirmation tokens
         resolved = any(event["resolution_status"] == "resolved" for event in events)
@@ -594,7 +634,7 @@ class AnalyticsRepository:
             try:
                 from memory_summarizer import _ollama
                 transcript = "\n".join(
-                    f"{'Customer' if item['role'] != 'assistant' else 'Support'}: {item['text']}"
+                    f"{'Support' if _is_assistant_event(item) else 'Customer'}: {item['text']}"
                     for item in events
                 )
                 prompt = (
@@ -707,7 +747,7 @@ class AnalyticsRepository:
                 ORDER BY count DESC LIMIT 10""", (organization_scope, since),
             ).fetchall()
         events = [dict(row) for row in rows]
-        customer_events = [row for row in events if row["role"] != "assistant"]
+        customer_events = [row for row in events if not _is_assistant_event(row)]
         sessions: dict[str, list[dict[str, Any]]] = {}
         for row in events:
             sessions.setdefault(row["session_id"], []).append(row)
@@ -723,14 +763,19 @@ class AnalyticsRepository:
             if not any(event["resolution_status"] == "resolved" for event in session)
         ]
         gap_results = [dict(row) for row in gap_rows]
+        live_gaps = self.missing_knowledge_topics(organization_scope, days, 10)
+        gap_results.extend({"topic": row["topic"], "reason": row["reason"],
+                            "question": row["example_question"], "gap_type": "missing_knowledge",
+                            "count": row["count"], "customers": row["customers"],
+                            "source": "live_tool"} for row in live_gaps)
         if not gap_results:
             # Legacy/imported sessions may predate LLM insight columns. Surface a bounded
             # candidate list from explicit no-answer language until an LLM backfill runs.
             candidates: Counter[tuple[str, str, str, str]] = Counter()
             candidate_customers: dict[tuple[str, str, str, str], set[str]] = {}
             for session in sessions.values():
-                customer = [event for event in session if event["role"] != "assistant"]
-                assistant = [event for event in session if event["role"] == "assistant"]
+                customer = [event for event in session if not _is_assistant_event(event)]
+                assistant = [event for event in session if _is_assistant_event(event)]
                 category = Counter(event["category"] for event in customer or session).most_common(1)[0][0]
                 insight = detect_knowledge_gap(customer, assistant, category)
                 if insight["knowledge_gap"]:
@@ -795,8 +840,8 @@ class AnalyticsRepository:
         updates = []
         organization_counts: Counter[str] = Counter()
         for (scope, mobile_no, session_id), events in sessions.items():
-            customers = [event for event in events if event["role"] != "assistant"]
-            assistants = [event for event in events if event["role"] == "assistant"]
+            customers = [event for event in events if not _is_assistant_event(event)]
+            assistants = [event for event in events if _is_assistant_event(event)]
             category = Counter(event["category"] for event in customers or events).most_common(1)[0][0]
             insight = detect_knowledge_gap(customers, assistants, category)
             if insight["knowledge_gap"]:
@@ -833,6 +878,10 @@ def classify_category(text: str, industry: str) -> str:
     return "Other"
 
 
+def _is_assistant_event(event: dict[str, Any]) -> bool:
+    return str(event.get("role", "")).strip().lower() in {"assistant", "agent", "human", "bot", "system"}
+
+
 def classify_sentiment(text: str) -> str:
     if NEGATIVE_RE.search(text):
         return "negative"
@@ -852,8 +901,7 @@ def detect_knowledge_gap(
     topic = category if category and category != "Other" else concise_issue(customer_text, 80)
     meaningful_questions = [
         str(event.get("text", "")).strip() for event in customer_events
-        if str(event.get("text", "")).strip() and not is_greeting(str(event.get("text", "")))
-        and not re.fullmatch(r"\[?(?:image|image attached|attachment)\]?", str(event.get("text", "")).strip(), re.I)
+        if _is_substantive_knowledge_question(str(event.get("text", "")))
     ]
     refusal_events = [event for event in assistant_events if NO_ANSWER_RE.search(str(event.get("text", "")))]
     refusal_timestamp = str(refusal_events[-1].get("timestamp", "")) if refusal_events else ""
@@ -862,7 +910,10 @@ def detect_knowledge_gap(
         if str(event.get("text", "")).strip() in meaningful_questions
         and (not refusal_timestamp or str(event.get("timestamp", "")) <= refusal_timestamp)
     ]
-    question = preceding_questions[-1] if preceding_questions else (meaningful_questions[-1] if meaningful_questions else "")
+    candidates = preceding_questions or meaningful_questions
+    question = max(candidates, key=lambda value: (len(re.findall(r"\w+", value)), len(value))) if candidates else ""
+    if question and (not category or category == "Other"):
+        topic = concise_issue(question, 80)
     if not meaningful_questions:
         is_gap = False
     reason = None
@@ -877,6 +928,25 @@ def detect_knowledge_gap(
         "knowledge_gap_question": concise_issue(question, 180) if is_gap else None,
         "knowledge_gap_type": gap_type,
     }
+
+
+def _is_substantive_knowledge_question(text: str) -> bool:
+    value = re.sub(r"\s+", " ", text).strip()
+    if not value or is_greeting(value):
+        return False
+    if re.fullmatch(r"\[?(?:image|image attached|attachment)\]?", value, re.I):
+        return False
+    without_images = re.sub(r"\[+\s*(?:image|image attached|attachment)(?::[^\]]*)?\s*\]+", " ", value, flags=re.I)
+    if not re.search(r"[^\W\d_]{2,}", without_images, re.UNICODE):
+        return False
+    if re.fullmatch(r"(?:\d+|\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}|yes|no|main menu|back|cancel)", value, re.I):
+        return False
+    if re.fullmatch(r"(?:call me|connect me|agent|live agent|talk to (?:an? )?agent|transfer me)", value, re.I):
+        return False
+    if re.search(r"\b(?:VIP salary|successful referral|daily bonus|https?://|www\.)\b", value, re.I):
+        return False
+    words = re.findall(r"[^\W\d_]+", value, re.UNICODE)
+    return len(words) >= 3 or (len(words) >= 2 and "?" in value)
 
 
 def deduplicate_session_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -984,7 +1054,7 @@ def is_greeting(text: str) -> bool:
 
 def extract_core_issue(events: list[dict[str, Any]], industry: str) -> str:
     """Extract the core issue/topic from conversation history by analyzing all customer messages."""
-    customer_events = [e for e in events if e.get("role") != "assistant"]
+    customer_events = [e for e in events if not _is_assistant_event(e)]
     if not customer_events:
         return "No recent issue recorded."
     
@@ -993,7 +1063,7 @@ def extract_core_issue(events: list[dict[str, Any]], industry: str) -> str:
         try:
             chronological = sorted(events, key=lambda item: str(item.get("timestamp", "")))
             transcript = "\n".join(
-                f"{'Customer' if item.get('role') != 'assistant' else 'Support'}: {item.get('text', '')}"
+                f"{'Support' if _is_assistant_event(item) else 'Customer'}: {item.get('text', '')}"
                 for item in chronological
             )
             prompt = (

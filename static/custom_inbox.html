@@ -154,6 +154,7 @@
       div.textContent=text;
       $('messages').appendChild(div);
       $('messages').scrollTop=$('messages').scrollHeight;
+      return div;
     };
 
     const sessionParts=summary=>{
@@ -236,21 +237,27 @@
       if(!text)return;
       $('message').value='';
       bubble(text,'customer');
+      const pending=bubble('Searching your previous conversations and support knowledge…','assistant');
       try{
         const context={...identity(),session_id:$('session').value.trim()};
+        // Search history before saving the new question so it cannot retrieve itself.
+        const recalled=await invoke('search_customer_memory',{
+          ...identity(),query:text,limit:5,generate_answer:true
+        });
         await invoke('save_customer_memory',{...context,role:'customer',text});
-        const approved=await invoke('search_approved_knowledge',{organization_id:identity().organization_id,query:text,limit:5});
+        const topScore=Number(recalled.items?.[0]?.score||0);
         let answer;
-        if(approved.status==='answer_found'){
-          answer=approved.answer;
+        if(recalled.count>0&&topScore>=0.65){
+          answer=recalled.answer;
         }else{
-          const recalled=await invoke('search_customer_memory',{...identity(),query:text,limit:8,generate_answer:true});
-          answer=recalled.answer||'I could not find relevant information in previous conversations.';
+          const resolved=await invoke('resolve_support_answer',{...identity(),session_id:context.session_id,query:text,limit:5});
+          answer=resolved.answer;
         }
-        bubble(answer,'assistant');
+        answer=answer||'I apologize, but I could not find an answer in our knowledge records.';
+        pending.textContent=answer;
         await invoke('save_customer_memory',{...context,role:'assistant',text:answer});
       }catch(error){
-        bubble(`Memory error: ${error.message}`,'assistant');
+        pending.textContent=`Memory error: ${error.message}`;
       }
     });
 

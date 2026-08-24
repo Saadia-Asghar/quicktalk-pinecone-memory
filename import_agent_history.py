@@ -16,11 +16,11 @@ from analytics import AnalyticsRepository
 API_URL = "http://127.0.0.1:8765/api/memories"
 HEADERS = {
     "Content-Type": "application/json",
-    "X-API-Key": "quicktalk-local-demo-2026"
+    "X-API-Key": os.getenv("SERVICE_API_KEY", "")
 }
 
-JSON_FILE = r"D:\najoomi\20july_1auguserData.agent_chat_history.json"
-PROGRESS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "import_progress.txt")
+JSON_FILE = os.getenv("AGENT_HISTORY_JSON", "")
+PROGRESS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mem0_all_org_progress.txt")
 
 def load_progress():
     if os.path.exists(PROGRESS_FILE):
@@ -70,9 +70,9 @@ def extract_mem0_fact(org_id, session_id, mobile_no, text):
                 if resp.status == 201:
                     return True
         except urllib.error.HTTPError as e:
-            if e.code == 429:
+            if e.code in (429, 500, 502, 503, 504):
                 wait_time = base_wait * (2 ** attempt)
-                print(f"Rate limited (429). Retrying in {wait_time}s...")
+                print(f"Memory backend returned {e.code}. Retrying in {wait_time}s...")
                 time.sleep(wait_time)
                 continue
             else:
@@ -86,6 +86,8 @@ def extract_mem0_fact(org_id, session_id, mobile_no, text):
     return False
 
 def run_import():
+    if not JSON_FILE:
+        raise RuntimeError("AGENT_HISTORY_JSON must point to the agent history JSON file")
     print(f"Loading data from {JSON_FILE}...")
     with open(JSON_FILE, 'r', encoding='utf-8') as f:
         data = json.load(f)
@@ -107,6 +109,7 @@ def run_import():
 
     batch_size = 50
     events_batch = []
+    completed = True
     
     for i in range(start_index, total):
         session = data[i]
@@ -116,8 +119,18 @@ def run_import():
         
         # 1. Prepare raw events for bulk insertion
         history = session.get("history", [])
+        if not isinstance(history, list):
+            history = []
+
         for msg in history:
-            text = msg.get("message", "").strip()
+            if not isinstance(msg, dict):
+                continue
+
+            text = msg.get("message", "")
+            if not isinstance(text, str):
+                text = str(text)
+            text = text.strip()
+
             if not text:
                 continue
                 
@@ -150,26 +163,29 @@ def run_import():
         if summary and len(summary) > 5:
             success = extract_mem0_fact(org_id, session_id, mobile_no, summary)
             if success:
-                print(f"[{i+1}/{total}] Extracted Mem0 facts for {mobile_no} | {summary[:50]}...")
+                safe_summary = summary[:50].encode('utf-8', 'ignore').decode('utf-8')
+                print(f"[{i+1}/{total}] Extracted Mem0 facts for {mobile_no} | {safe_summary}...")
             else:
                 print(f"[{i+1}/{total}] Failed extraction for {mobile_no}")
+                completed = False
+                break
         else:
             print(f"[{i+1}/{total}] No summary to extract for {mobile_no}")
             
-        # Save progress every 10 sessions
-        if i % 10 == 0:
-            save_progress(i)
+        # Advance only after this session has been handled successfully.
+        save_progress(i + 1)
             
     # Insert any remaining events
     if events_batch:
         analytics.record_memories_bulk(events_batch)
         
-    # Final progress save
-    save_progress(total)
+    # Mark complete only when every session reached a durable checkpoint.
+    if completed:
+        save_progress(total)
     
     print("\nTriggering Profile Analytics Recalculation...")
     analytics.backfill_profiles()
-    print("All done! Import and bot training complete.")
+    print("All done! Import and bot training complete." if completed else "Import paused at the failed session; rerun to resume safely.")
 
 if __name__ == "__main__":
     run_import()

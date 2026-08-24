@@ -1,0 +1,9 @@
+Rewrite RESPONSE using STYLE_GUIDANCE while preserving every fact, number, currency, date, name, restriction and uncertainty exactly.
+Do not add promises, policies, prices, advice or facts. Do not remove an apology or turn uncertainty into certainty.
+Match the customer's language when practical. Be concise and natural. Return only the rewritten response.
+
+STYLE_GUIDANCE:
+{{style_guidance}}
+
+RESPONSE:
+{{response}}
