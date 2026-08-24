@@ -246,9 +246,10 @@
           ...identity(),query:text,limit:5,generate_answer:true
         });
         await invoke('save_customer_memory',{...context,role:'customer',text});
-        const topScore=Number(recalled.items?.[0]?.score||0);
         let answer;
-        if(recalled.answer_eligible&&recalled.count>0&&topScore>=0.65){
+        // The server has already checked personal-history intent and ranked tenant-scoped
+        // evidence. A second browser threshold used to discard valid memory results.
+        if(recalled.answer_eligible&&recalled.count>0){
           answer=recalled.answer;
         }else{
           const resolved=await invoke('resolve_support_answer',{...identity(),session_id:context.session_id,query:text,limit:5});

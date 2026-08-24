@@ -194,14 +194,16 @@ class FlaskMemoryServiceTests(unittest.TestCase):
         response = self.client.post("/api/tools/search_customer_memory/invoke", json={
             "arguments": {
                 "organization_id": "org-health", "mobile_no": "+923331234567",
+                "session_id": "brand-new-live-session",
                 "query": "Who was my previous appointment with?", "generate_answer": True,
             }
         })
         result = response.get_json()["result"]
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(result["retrieval"], "mem0-semantic")
+        self.assertEqual(result["retrieval"], "hybrid-mem0-and-session-summaries")
         self.assertTrue(result["grounded"])
         self.assertIn("Dr. Ahmed", result["answer"])
+        self.assertNotEqual(result["items"][0].get("session_id"), "brand-new-live-session")
 
     def test_unknown_tool_is_json_404(self):
         response = self.client.post("/api/tools/not-a-tool/invoke", json={})

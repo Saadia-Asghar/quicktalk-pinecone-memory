@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from typing import Any
 import threading
 import re
+import os
 
 from memory_summarizer import answer_from_memories, contextual_welcome
 from analytics import is_greeting
@@ -17,6 +18,49 @@ def _requests_customer_history(query: str) -> bool:
         r"that\s+(?:appointment|booking|case|ticket)|my\s+(?:previous|last|appointment|booking|"
         r"doctor|package|plan|case|ticket|request))\b", query, re.I,
     ))
+
+
+_HISTORY_STOP_WORDS = {
+    "a", "an", "and", "did", "do", "from", "i", "in", "is", "it", "last",
+    "me", "my", "of", "previous", "previously", "report", "reported", "tell",
+    "that", "the", "time", "to", "was", "what", "when", "which", "you",
+}
+_HISTORY_CANONICAL_TERMS = {
+    "broadband": "internet", "connection": "internet", "connectivity": "internet",
+    "fiber": "internet", "fibre": "internet", "net": "internet",
+    "complaint": "issue", "problem": "issue", "trouble": "issue",
+    "booked": "appointment", "booking": "appointment",
+}
+
+
+def _history_terms(text: str) -> set[str]:
+    terms = set(re.findall(r"[a-z0-9]+", str(text).casefold())) - _HISTORY_STOP_WORDS
+    return {_HISTORY_CANONICAL_TERMS.get(term, term) for term in terms}
+
+
+def _session_summary_memory_items(query: str, summaries: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    """Rank structured session summaries as a durable fallback for incomplete Mem0 backfills."""
+    query_terms = _history_terms(query)
+    ranked = []
+    for position, summary in enumerate(summaries):
+        text = str(summary.get("summary", "")).strip()
+        if not text:
+            continue
+        overlap = len(query_terms & _history_terms(text))
+        if query_terms and overlap == 0:
+            continue
+        score = (overlap / max(len(query_terms), 1)) if query_terms else 0.75
+        ranked.append((score, -position, {
+            "text": text,
+            "memory": text,
+            "session_id": summary.get("session_id", ""),
+            "timestamp": summary.get("ended_at") or summary.get("started_at") or "",
+            "role": "session_summary",
+            "score": round(min(0.99, max(0.70, score)), 4),
+            "source": "structured-session-summary",
+        }))
+    ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [item[2] for item in ranked[:limit]]
 
 
 TOOL_DEFINITIONS = [
@@ -239,14 +283,58 @@ class ToolRegistry:
             if not history_intent:
                 return {"items": [], "count": 0, "retrieval": "skipped-general-question",
                         "history_intent": False, "answer_eligible": False, "grounded": False}
-            items = self.store.search(
-                organization_id=arguments["organization_id"],
-                mobile_no=arguments["mobile_no"],
-                query=arguments["query"],
-                session_id=arguments.get("session_id"),
-                limit=limit,
-            )
-            result = {"items": items, "count": len(items), "retrieval": "mem0-semantic",
+            search_kwargs = {
+                "organization_id": arguments["organization_id"],
+                "mobile_no": arguments["mobile_no"],
+                "query": arguments["query"],
+                # Deliberately search across sessions. Restricting this to the new live
+                # session prevents the customer from recalling older conversations.
+                "session_id": None,
+                "limit": limit,
+            }
+            if getattr(self.store, "backend", "") == "local-fallback":
+                items = self.store.search(**search_kwargs)
+                retrieval = "local-semantic"
+            else:
+                search_pool = ThreadPoolExecutor(max_workers=1)
+                try:
+                    search_future = search_pool.submit(
+                        self.store.search,
+                        **search_kwargs,
+                    )
+                    items = search_future.result(
+                        timeout=float(os.getenv("LIVE_MEMORY_SEARCH_TIMEOUT", "5"))
+                    )
+                    retrieval = "mem0-semantic"
+                except TimeoutError:
+                    items = []
+                    retrieval = "mem0-timeout"
+                except Exception:
+                    items = []
+                    retrieval = "mem0-unavailable"
+                finally:
+                    search_pool.shutdown(wait=False, cancel_futures=True)
+            if self.analytics:
+                profile = self.analytics.get_profile(
+                    str(arguments["organization_id"]), str(arguments["mobile_no"]),
+                    session_limit=50,
+                )
+                summary_items = _session_summary_memory_items(
+                    str(arguments["query"]), profile.get("session_summaries", []), limit,
+                )
+                if summary_items:
+                    # Structured summaries cover conversations whose Mem0 backfill is
+                    # incomplete and also outrank weak, unrelated vector matches.
+                    items = sorted(
+                        [*items, *summary_items],
+                        key=lambda item: float(item.get("score") or 0), reverse=True,
+                    )[:limit]
+                    retrieval = (
+                        "hybrid-mem0-and-session-summaries"
+                        if retrieval in {"mem0-semantic", "local-semantic"}
+                        else f"{retrieval}-session-summary-fallback"
+                    )
+            result = {"items": items, "count": len(items), "retrieval": retrieval,
                       "history_intent": history_intent, "answer_eligible": history_intent and bool(items)}
             if arguments.get("generate_answer") and result["answer_eligible"]:
                 answer = answer_from_memories(str(arguments["query"]), items)

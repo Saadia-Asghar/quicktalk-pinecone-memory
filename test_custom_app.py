@@ -37,6 +37,7 @@ class CustomAppTests(unittest.TestCase):
             self.assertEqual(page.status_code, 200)
             self.assertIn(b"Customer at a glance", page.data)
             self.assertNotIn(b"Searching your previous conversations", page.data)
+            self.assertNotIn(b"topScore>=0.65", page.data)
 
         identity = {
             "organization_id": "custom-test",
