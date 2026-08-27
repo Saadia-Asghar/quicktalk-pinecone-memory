@@ -30,6 +30,9 @@ data/*-mem0-history.db
 server.out.log
 server.err.log
 flask-live.*.log
+deliverables/report-render/
+deliverables/presentation-preview*.png
+deliverables/.chrome-qa/
 scratch/
 *_progress.txt
 *_error.txt
